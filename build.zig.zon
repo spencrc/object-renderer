@@ -1,0 +1,25 @@
+.{
+    .name = .minecraft_again,
+    .version = "0.0.0",
+    .fingerprint = 0xd9e6f22b7102b381,
+    .minimum_zig_version = "0.16.0",
+    .dependencies = .{
+        .vulkan = .{
+            .url = "git+https://github.com/Snektron/vulkan-zig?ref=zig-0.16-compat#b496a6a561ffbbeb530b0f9ed4e059f88c0723a5",
+            .hash = "vulkan-0.0.0-r7Ytx7N9AwD7IZt5_XNHtkJ4G9qY0pCH-cpcOsbL8wzD",
+        },
+        .vulkan_headers = .{
+            .url = "git+https://github.com/KhronosGroup/Vulkan-Headers#d314eae73fdc90847bb8304a86ee7c6a8ee023b6",
+            .hash = "N-V-__8AADSXewLh83HGH4ZdFU58Bu_P_tGCvKnZgfAVt4_H",
+        },
+        .sdl3 = .{
+            .url = "git+https://codeberg.org/7Games/zig-sdl3?ref=v0.2.2#83c694024f23cbacfa36fcd8fca1c57d4957203e",
+            .hash = "sdl3-0.2.2-NmT1Q-2jKQBa4uSXUwuVwdmXpXe-eYwim7Wkyx531v6O",
+        },
+    },
+    .paths = .{
+        "build.zig",
+        "build.zig.zon",
+        "src",
+    },
+}
