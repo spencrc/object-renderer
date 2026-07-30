@@ -6,12 +6,6 @@ const builtin = @import("builtin");
 const FPS = 60;
 const SCREEN_WIDTH = 640;
 const SCREEN_HEIGHT = 480;
-const LIBVULKAN_PATH: [:0]const u8 = switch (builtin.os.tag) {
-    .linux => "libvulkan.so.1",
-    .macos => "libvulkan.1.dylib",
-    .windows => "vulkan-1.dll",
-    else => @panic("unsupported os"),
-};
 const SDL_FLAGS = sdl3.InitFlags{
     .video = true,
 };
@@ -34,7 +28,13 @@ pub fn init(allocator: std.mem.Allocator) !Engine {
     var self: Engine = undefined;
     self.allocator = allocator;
 
-    try sdl3.vulkan.loadLibrary(LIBVULKAN_PATH);
+    const libvulkanPath: [:0]const u8 = switch (builtin.os.tag) {
+        .linux => "libvulkan.so.1",
+        .macos => "libvulkan.1.dylib",
+        .windows => "vulkan-1.dll",
+        else => @panic("unsupported os"),
+    };
+    try sdl3.vulkan.loadLibrary(libvulkanPath);
     try self.initVulkan();
 
     const window_flags = sdl3.video.Window.Flags{
