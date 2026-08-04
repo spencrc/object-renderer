@@ -10,6 +10,17 @@ const SDL_FLAGS = sdl3.InitFlags{
     .video = true,
 };
 
+const QueueFamilyIndices = struct {
+    graphics_family_index: u32,
+    present_family_index: u32,
+};
+
+const DeviceCandidate = struct {
+    pdevice: vk.PhysicalDevice,
+    props: vk.PhysicalDeviceProperties,
+    queues: QueueFamilyIndices,
+};
+
 const Engine = @This();
 
 allocator: std.mem.Allocator,
@@ -18,7 +29,13 @@ vkb: vk.BaseWrapper,
 instance: vk.InstanceProxy,
 debug_messenger: if (builtin.mode == .Debug) vk.DebugUtilsMessengerEXT else void,
 surface: vk.SurfaceKHR,
-gpu: vk.PhysicalDevice,
+
+pdevice: vk.PhysicalDevice,
+props: vk.PhysicalDeviceProperties,
+
+graphics_family_index: u32,
+present_family_index: u32,
+
 device: vk.DeviceProxy,
 // sdl3 objects
 window: sdl3.video.Window,
@@ -51,12 +68,12 @@ pub fn init(allocator: std.mem.Allocator) !Engine {
 }
 
 pub fn deinit(self: *Engine) void {
-    if (builtin.mode == .Debug) {
-        self.instance.destroyDebugUtilsMessengerEXT(self.debug_messenger, null);
-    }
+    self.device.destroyDevice(null);
     self.instance.destroySurfaceKHR(self.surface, null);
+    if (builtin.mode == .Debug) self.instance.destroyDebugUtilsMessengerEXT(self.debug_messenger, null);
     self.instance.destroyInstance(null);
     // need to destroy wrappers as well to prevent mem leaks
+    self.allocator.destroy(self.device.wrapper);
     self.allocator.destroy(self.instance.wrapper);
 
     self.window.deinit();
@@ -115,6 +132,42 @@ fn initVulkan(self: *Engine) !void {
     const sdl_surface: sdl3.vulkan.Surface = try .init(self.window, @ptrFromInt(@intFromEnum(self.instance.handle)), null);
     self.surface = @enumFromInt(@intFromPtr(sdl_surface.surface));
     errdefer self.instance.destroySurfaceKHR(self.surface, null);
+
+    const candidate = try pickCandidateDevice(self.instance, self.surface, self.allocator);
+    self.pdevice = candidate.pdevice;
+    self.props = candidate.props;
+    self.graphics_family_index = candidate.queues.graphics_family_index;
+    self.present_family_index = candidate.queues.present_family_index;
+
+    const priority = [_]f32{1};
+    const required_device_extensions = comptime getRequiredDeviceExtensions();
+    const device = try self.instance.createDevice(self.pdevice, &.{
+        .queue_create_info_count = if (candidate.queues.graphics_family_index == candidate.queues.present_family_index) 1 else 2,
+        .p_queue_create_infos = &[_]vk.DeviceQueueCreateInfo{
+            .{
+                .queue_family_index = candidate.queues.graphics_family_index,
+                .queue_count = 1,
+                .p_queue_priorities = &priority,
+            },
+            .{
+                .queue_family_index = candidate.queues.present_family_index,
+                .queue_count = 1,
+                .p_queue_priorities = &priority,
+            },
+        },
+        .enabled_extension_count = required_device_extensions.len,
+        .pp_enabled_extension_names = @ptrCast(&required_device_extensions),
+        .enabled_layer_count = 0,
+        .pp_enabled_layer_names = undefined,
+    }, null);
+
+    const vkd = try self.allocator.create(vk.DeviceWrapper);
+    errdefer self.allocator.destroy(vkd);
+    vkd.* = vk.DeviceWrapper.load(device, self.instance.wrapper.dispatch.vkGetDeviceProcAddr.?);
+    self.device = vk.DeviceProxy.init(device, vkd);
+    errdefer self.device.destroyDevice(null);
+
+    return self;
 }
 
 fn checkLayerSupport(vkb: *const vk.BaseWrapper, allocator: std.mem.Allocator) !bool {
@@ -158,6 +211,119 @@ fn debugUtilsMessengerCallback(severity: vk.DebugUtilsMessageSeverityFlagsEXT, m
     std.debug.print("[{s}][{s}]. Message:\n  {s}\n", .{ severity_str, type_str, message });
 
     return .false;
+}
+
+fn pickCandidateDevice(
+    instance: vk.InstanceProxy,
+    surface: vk.SurfaceKHR,
+    allocator: std.mem.Allocator,
+) !DeviceCandidate {
+    const pdevices = try instance.enumeratePhysicalDevicesAlloc(allocator);
+    defer allocator.free(pdevices);
+
+    for (pdevices) |pdevice| {
+        if (try getDeviceCandidate(pdevice, instance, surface, allocator)) |candidate| {
+            return candidate;
+        }
+    }
+
+    return error.NoSuitableDevices;
+}
+
+fn getDeviceCandidate(
+    pdevice: vk.PhysicalDevice,
+    instance: vk.InstanceProxy,
+    surface: vk.SurfaceKHR,
+    allocator: std.mem.Allocator,
+) !?DeviceCandidate {
+    if (!try checkDeviceExtensionSupport(pdevice, instance, allocator)) return false;
+
+    if (!try checkDeviceSurfaceSupport(pdevice, instance, surface)) return false;
+
+    if (try findQueueFamilies(pdevice, instance, surface, allocator)) |queue_families| {
+        const props = instance.getPhysicalDeviceProperties(pdevice);
+        return DeviceCandidate{
+            .pdevice = pdevice,
+            .props = props,
+            .queues = queue_families,
+        };
+    }
+}
+
+fn checkDeviceExtensionSupport(
+    pdevice: vk.PhysicalDevice,
+    instance: vk.InstanceProxy,
+    allocator: std.mem.Allocator,
+) !bool {
+    const properties_list = try instance.enumerateDeviceExtensionPropertiesAlloc(pdevice, null, allocator);
+    defer allocator.free(properties_list);
+
+    const required_device_extensions = comptime getRequiredDeviceExtensions();
+
+    for (required_device_extensions) |required_extension| {
+        for (properties_list) |props| {
+            if (std.mem.eql(u8, std.mem.span(required_extension), std.mem.sliceTo(&props.extension_name, 0))) {
+                break;
+            }
+        } else {
+            return false;
+        }
+    }
+    return true;
+}
+
+fn getRequiredDeviceExtensions() []const [*:0]const u8 {
+    return switch (builtin.mode) {
+        else => return [_][*:0]const u8{vk.extensions.khr_swapchain.name},
+    };
+}
+
+fn checkDeviceSurfaceSupport(
+    pdevice: vk.PhysicalDevice,
+    instance: vk.InstanceProxy,
+    surface: vk.SurfaceKHR,
+) !bool {
+    var format_count: u32 = undefined;
+    _ = try instance.getPhysicalDeviceSurfaceFormatsKHR(pdevice, surface, &format_count, null);
+
+    var present_mode_count: u32 = undefined;
+    _ = try instance.getPhysicalDeviceSurfacePresentModesKHR(pdevice, surface, &present_mode_count, null);
+
+    return format_count > 0 and present_mode_count > 0;
+}
+
+fn findQueueFamilies(
+    pdevice: vk.PhysicalDevice,
+    instance: vk.InstanceProxy,
+    surface: vk.SurfaceKHR,
+    allocator: std.mem.Allocator,
+) ?QueueFamilyIndices {
+    const families = try instance.getPhysicalDeviceQueueFamilyPropertiesAlloc(pdevice, allocator);
+    defer allocator.free(families);
+
+    var graphics_family_index: ?u32 = null;
+    var present_family_index: ?u32 = null;
+
+    for (families, 0..) |properties, i| {
+        const family: u32 = @intCast(i);
+
+        if (graphics_family_index == null and properties.queue_flags.graphics_bit) {
+            graphics_family_index = family;
+        }
+
+        if (present_family_index == null and (try instance.getPhysicalDeviceSurfaceSupportKHR(pdevice, family, surface)) == .true) {
+            present_family_index = family;
+        }
+    }
+
+    if (graphics_family_index != null and present_family_index != null) {
+        return QueueFamilyIndices{
+            .graphics_family_index = graphics_family_index.?,
+            .present_family_index = present_family_index.?,
+        };
+    }
+
+    return null;
 }
 
 fn initSwapchain() void {}
