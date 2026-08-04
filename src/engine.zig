@@ -68,6 +68,7 @@ fn initVulkan(self: *Engine) !void {
     const getInstanceProcAddr: vk.PfnGetInstanceProcAddr = @ptrCast(try sdl3.vulkan.getVkGetInstanceProcAddr());
     self.vkb = vk.BaseWrapper.load(getInstanceProcAddr);
 
+    if (try checkLayerSupport(&self.vkb, self.allocator) == false) return error.MissingLayer;
     const required_layers = comptime getRequiredLayers();
 
     var instances_exts: std.ArrayList([*:0]const u8) = .empty;
@@ -114,6 +115,24 @@ fn initVulkan(self: *Engine) !void {
     const sdl_surface: sdl3.vulkan.Surface = try .init(self.window, @ptrFromInt(@intFromEnum(self.instance.handle)), null);
     self.surface = @enumFromInt(@intFromPtr(sdl_surface.surface));
     errdefer self.instance.destroySurfaceKHR(self.surface, null);
+}
+
+fn checkLayerSupport(vkb: *const vk.BaseWrapper, allocator: std.mem.Allocator) !bool {
+    const available_layers = try vkb.enumerateInstanceLayerPropertiesAlloc(allocator);
+    defer allocator.free(available_layers);
+
+    const required_layers = comptime getRequiredLayers();
+
+    for (required_layers) |required_layer| {
+        for (available_layers) |layer| {
+            if (std.mem.eql(u8, std.mem.span(required_layer), std.mem.sliceTo(&layer.layer_name, 0))) {
+                break;
+            }
+        } else {
+            return false;
+        }
+    }
+    return true;
 }
 
 fn getRequiredLayers() []const [*:0]const u8 {
