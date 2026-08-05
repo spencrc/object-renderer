@@ -1,14 +1,8 @@
 const vk = @import("vulkan");
-const sdl3 = @import("sdl3");
 const std = @import("std");
 const builtin = @import("builtin");
-
-const FPS = 60;
-const SCREEN_WIDTH = 640;
-const SCREEN_HEIGHT = 480;
-const SDL_FLAGS = sdl3.InitFlags{
-    .video = true,
-};
+const sdl3 = @import("sdl3");
+const Swapchain = @import("swapchain.zig");
 
 const QueueFamilyIndices = struct {
     graphics_family_index: u32,
@@ -37,35 +31,6 @@ graphics_family_index: u32,
 present_family_index: u32,
 
 device: vk.DeviceProxy,
-// sdl3 objects
-window: sdl3.video.Window,
-
-pub fn init(allocator: std.mem.Allocator) !Engine {
-    try sdl3.init(SDL_FLAGS);
-
-    var self: Engine = undefined;
-    self.allocator = allocator;
-
-    const window_flags = sdl3.video.Window.Flags{
-        .vulkan = true,
-    };
-    self.window = try .init("Hello Vulkan", SCREEN_WIDTH, SCREEN_HEIGHT, window_flags);
-
-    try self.initVulkan();
-
-    var quit = false;
-    while (!quit) {
-        // Event logic.
-        while (sdl3.events.poll()) |event|
-            switch (event) {
-                .quit => quit = true,
-                .terminating => quit = true,
-                else => {},
-            };
-    }
-
-    return self;
-}
 
 pub fn deinit(self: *Engine) void {
     self.device.destroyDevice(null);
@@ -75,14 +40,16 @@ pub fn deinit(self: *Engine) void {
     // need to destroy wrappers as well to prevent mem leaks
     self.allocator.destroy(self.device.wrapper);
     self.allocator.destroy(self.instance.wrapper);
-
-    self.window.deinit();
-    sdl3.quit(SDL_FLAGS);
-    sdl3.shutdown();
 }
 
-fn initVulkan(self: *Engine) !void {
-    const getInstanceProcAddr: vk.PfnGetInstanceProcAddr = @ptrCast(try sdl3.vulkan.getVkGetInstanceProcAddr());
+pub fn init(
+    allocator: std.mem.Allocator,
+    getInstanceProcAddr: vk.PfnGetInstanceProcAddr,
+    backend_extensions: []const [*:0]const u8,
+    window: sdl3.video.Window,
+) !Engine {
+    var self: Engine = undefined;
+    self.allocator = allocator;
     self.vkb = vk.BaseWrapper.load(getInstanceProcAddr);
 
     if (try checkLayerSupport(&self.vkb, self.allocator) == false) return error.MissingLayer;
@@ -91,7 +58,7 @@ fn initVulkan(self: *Engine) !void {
     var instances_exts: std.ArrayList([*:0]const u8) = .empty;
     defer instances_exts.deinit(self.allocator);
     try instances_exts.appendSlice(self.allocator, comptime getInstanceExtensions());
-    try instances_exts.appendSlice(self.allocator, try sdl3.vulkan.getInstanceExtensions());
+    try instances_exts.appendSlice(self.allocator, backend_extensions);
 
     const instance = try self.vkb.createInstance(&.{
         .p_application_info = &.{
@@ -129,7 +96,7 @@ fn initVulkan(self: *Engine) !void {
         }, null);
     }
 
-    const sdl_surface: sdl3.vulkan.Surface = try .init(self.window, @ptrFromInt(@intFromEnum(self.instance.handle)), null);
+    const sdl_surface: sdl3.vulkan.Surface = try .init(window, @ptrFromInt(@intFromEnum(self.instance.handle)), null);
     self.surface = @enumFromInt(@intFromPtr(sdl_surface.surface));
     errdefer self.instance.destroySurfaceKHR(self.surface, null);
 
@@ -156,7 +123,7 @@ fn initVulkan(self: *Engine) !void {
             },
         },
         .enabled_extension_count = required_device_extensions.len,
-        .pp_enabled_extension_names = @ptrCast(&required_device_extensions),
+        .pp_enabled_extension_names = required_device_extensions.ptr,
         .enabled_layer_count = 0,
         .pp_enabled_layer_names = undefined,
     }, null);
@@ -188,17 +155,20 @@ fn checkLayerSupport(vkb: *const vk.BaseWrapper, allocator: std.mem.Allocator) !
     return true;
 }
 
+const EMPTY_NAMES = [_][*:0]const u8{};
+const DEBUG_REQUIRED_LAYERS = [_][*:0]const u8{"VK_LAYER_KHRONOS_validation"}; // will be DCE'd if not in Debug or ReleaseSafe
 fn getRequiredLayers() []const [*:0]const u8 {
     return switch (builtin.mode) {
-        .Debug, .ReleaseSafe => &[_][*:0]const u8{"VK_LAYER_KHRONOS_validation"},
-        else => &[_][*:0]const u8{},
+        .Debug, .ReleaseSafe => &DEBUG_REQUIRED_LAYERS,
+        else => &EMPTY_NAMES,
     };
 }
 
+const DEBUG_INSTANCE_EXTS = [_][*:0]const u8{vk.extensions.ext_debug_utils.name}; // will be DCE'd if not in Debug or ReleaseSafe
 fn getInstanceExtensions() []const [*:0]const u8 {
     return switch (builtin.mode) {
-        .Debug, .ReleaseSafe => &[_][*:0]const u8{vk.extensions.ext_debug_utils.name},
-        else => &[_][*:0]const u8{},
+        .Debug, .ReleaseSafe => &DEBUG_INSTANCE_EXTS,
+        else => &EMPTY_NAMES,
     };
 }
 
@@ -236,9 +206,9 @@ fn getDeviceCandidate(
     surface: vk.SurfaceKHR,
     allocator: std.mem.Allocator,
 ) !?DeviceCandidate {
-    if (!try checkDeviceExtensionSupport(pdevice, instance, allocator)) return false;
+    if (!try checkDeviceExtensionSupport(pdevice, instance, allocator)) return null;
 
-    if (!try checkDeviceSurfaceSupport(pdevice, instance, surface)) return false;
+    if (!try checkDeviceSurfaceSupport(pdevice, instance, surface)) return null;
 
     if (try findQueueFamilies(pdevice, instance, surface, allocator)) |queue_families| {
         const props = instance.getPhysicalDeviceProperties(pdevice);
@@ -248,6 +218,8 @@ fn getDeviceCandidate(
             .queues = queue_families,
         };
     }
+
+    return null;
 }
 
 fn checkDeviceExtensionSupport(
@@ -272,9 +244,10 @@ fn checkDeviceExtensionSupport(
     return true;
 }
 
+const REQUIRED_DEVICE_EXTS = [_][*:0]const u8{vk.extensions.khr_swapchain.name};
 fn getRequiredDeviceExtensions() []const [*:0]const u8 {
     return switch (builtin.mode) {
-        else => return [_][*:0]const u8{vk.extensions.khr_swapchain.name},
+        else => return &REQUIRED_DEVICE_EXTS,
     };
 }
 
@@ -297,7 +270,7 @@ fn findQueueFamilies(
     instance: vk.InstanceProxy,
     surface: vk.SurfaceKHR,
     allocator: std.mem.Allocator,
-) ?QueueFamilyIndices {
+) !?QueueFamilyIndices {
     const families = try instance.getPhysicalDeviceQueueFamilyPropertiesAlloc(pdevice, allocator);
     defer allocator.free(families);
 

@@ -1,7 +1,44 @@
 const std = @import("std");
-const engine = @import("engine.zig");
+const sdl3 = @import("sdl3");
+const vk = @import("vulkan");
+const GraphicsContext = @import("engine/graphics_context.zig");
+const Swapchain = @import("engine/swapchain.zig");
+
+const FPS = 60;
+const SCREEN_WIDTH = 640;
+const SCREEN_HEIGHT = 480;
+const SDL_FLAGS = sdl3.InitFlags{
+    .video = true,
+};
 
 pub fn main(init: std.process.Init) !void {
-    var e = try engine.init(init.gpa);
-    defer e.deinit();
+    defer sdl3.shutdown();
+
+    try sdl3.init(SDL_FLAGS);
+    defer sdl3.quit(SDL_FLAGS);
+
+    const window_flags = sdl3.video.Window.Flags{
+        .vulkan = true,
+    };
+    var window: sdl3.video.Window = try .init("Hello Vulkan", SCREEN_WIDTH, SCREEN_HEIGHT, window_flags);
+    defer window.deinit();
+
+    const getInstanceProcAddr: vk.PfnGetInstanceProcAddr = @ptrCast(try sdl3.vulkan.getVkGetInstanceProcAddr());
+    const sdl_exts = try sdl3.vulkan.getInstanceExtensions();
+    var ctx: GraphicsContext = try .init(init.gpa, getInstanceProcAddr, sdl_exts, window);
+    defer ctx.deinit();
+
+    var swapchain: Swapchain = try .init(&ctx, SCREEN_WIDTH, SCREEN_HEIGHT, init.gpa);
+    defer swapchain.deinit();
+
+    var quit = false;
+    while (!quit) {
+        // Event logic.
+        while (sdl3.events.poll()) |event|
+            switch (event) {
+                .quit => quit = true,
+                .terminating => quit = true,
+                else => {},
+            };
+    }
 }
