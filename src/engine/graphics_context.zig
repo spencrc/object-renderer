@@ -2,7 +2,6 @@ const vk = @import("vulkan");
 const std = @import("std");
 const builtin = @import("builtin");
 const sdl3 = @import("sdl3");
-const Swapchain = @import("swapchain.zig");
 
 const QueueFamilyIndices = struct {
     graphics_family_index: u32,
