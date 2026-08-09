@@ -129,52 +129,6 @@ pub fn init(
     return self;
 }
 
-fn checkLayerSupport(vkb: *const vk.BaseWrapper, allocator: std.mem.Allocator) !bool {
-    const available_layers = try vkb.enumerateInstanceLayerPropertiesAlloc(allocator);
-    defer allocator.free(available_layers);
-
-    const required_layers = comptime getRequiredLayers();
-
-    for (required_layers) |required_layer| {
-        for (available_layers) |layer| {
-            if (std.mem.eql(u8, std.mem.span(required_layer), std.mem.sliceTo(&layer.layer_name, 0))) {
-                break;
-            }
-        } else {
-            return false;
-        }
-    }
-    return true;
-}
-
-const EMPTY_NAMES = [_][*:0]const u8{};
-const DEBUG_REQUIRED_LAYERS = [_][*:0]const u8{"VK_LAYER_KHRONOS_validation"}; // will be DCE'd if not in Debug or ReleaseSafe
-fn getRequiredLayers() []const [*:0]const u8 {
-    return switch (builtin.mode) {
-        .Debug, .ReleaseSafe => &DEBUG_REQUIRED_LAYERS,
-        else => &EMPTY_NAMES,
-    };
-}
-
-const DEBUG_INSTANCE_EXTS = [_][*:0]const u8{vk.extensions.ext_debug_utils.name}; // will be DCE'd if not in Debug or ReleaseSafe
-fn getInstanceExtensions() []const [*:0]const u8 {
-    return switch (builtin.mode) {
-        .Debug, .ReleaseSafe => &DEBUG_INSTANCE_EXTS,
-        else => &EMPTY_NAMES,
-    };
-}
-
-fn debugUtilsMessengerCallback(severity: vk.DebugUtilsMessageSeverityFlagsEXT, msg_type: vk.DebugUtilsMessageTypeFlagsEXT, callback_data: ?*const vk.DebugUtilsMessengerCallbackDataEXT, _: ?*anyopaque) callconv(.c) vk.Bool32 {
-    const severity_str = if (severity.verbose_bit_ext) "verbose" else if (severity.info_bit_ext) "info" else if (severity.warning_bit_ext) "warning" else if (severity.error_bit_ext) "error" else "unknown";
-
-    const type_str = if (msg_type.general_bit_ext) "general" else if (msg_type.validation_bit_ext) "validation" else if (msg_type.performance_bit_ext) "performance" else if (msg_type.device_address_binding_bit_ext) "device addr" else "unknown";
-
-    const message: [*c]const u8 = if (callback_data) |cb_data| cb_data.p_message else "NO MESSAGE!";
-    std.debug.print("[{s}][{s}]. Message:\n  {s}\n", .{ severity_str, type_str, message });
-
-    return .false;
-}
-
 fn pickCandidateDevice(
     instance: vk.InstanceProxy,
     surface: vk.SurfaceKHR,
