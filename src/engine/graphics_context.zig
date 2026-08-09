@@ -30,7 +30,10 @@ present_family_index: u32,
 
 device: vk.DeviceProxy,
 
+swapchain: vk.SwapchainKHR,
+
 pub fn deinit(self: *Engine) void {
+    self.device.destroySwapchainKHR(self.swapchain, null);
     self.device.destroyDevice(null);
     self.instance.proxy.destroySurfaceKHR(self.surface, null);
     // need to destroy wrappers as well to prevent mem leaks
@@ -41,6 +44,8 @@ pub fn init(
     allocator: std.mem.Allocator,
     instance: *Instance,
     surface: vk.SurfaceKHR,
+    screen_width: usize,
+    screen_height: usize,
 ) !Engine {
     var self: Engine = undefined;
     self.allocator = allocator;
@@ -80,6 +85,46 @@ pub fn init(
     vkd.* = vk.DeviceWrapper.load(device, self.instance.proxy.wrapper.dispatch.vkGetDeviceProcAddr.?);
     self.device = vk.DeviceProxy.init(device, vkd);
     errdefer self.device.destroyDevice(null);
+
+    const caps = try self.instance.proxy.getPhysicalDeviceSurfaceCapabilitiesKHR(self.pdevice, self.surface);
+    const actual_extent = findSwapExtent(caps, screen_width, screen_height);
+    if (actual_extent.width == 0 or actual_extent.height == 0) {
+        return error.InvalidSurfaceDimensions;
+    }
+
+    const format = try findSurfaceFormat(self.instance.proxy, self.pdevice, self.surface, self.allocator);
+    const present_mode = try findPresentMode(self.instance.proxy, self.pdevice, self.surface, self.allocator);
+
+    const image_count = if (caps.max_image_count > 0)
+        @min(caps.min_image_count, caps.max_image_count)
+    else
+        caps.min_image_count;
+
+    const queue_family_index = [_]u32{ self.graphics_family_index, self.present_family_index };
+    const sharing_mode: vk.SharingMode = if (self.graphics_family_index != self.present_family_index)
+        .concurrent
+    else
+        .exclusive;
+
+    const swapchain = try self.device.createSwapchainKHR(&.{
+        .surface = self.surface,
+        .min_image_count = image_count,
+        .image_format = format.format,
+        .image_color_space = format.color_space,
+        .image_extent = actual_extent,
+        .image_array_layers = 1,
+        .image_usage = .{ .color_attachment_bit = true, .transfer_dst_bit = true },
+        .image_sharing_mode = sharing_mode,
+        .queue_family_index_count = queue_family_index.len,
+        .p_queue_family_indices = &queue_family_index,
+        .pre_transform = caps.current_transform,
+        .composite_alpha = .{ .opaque_bit_khr = true },
+        .present_mode = present_mode,
+        .clipped = .true,
+        .old_swapchain = .null_handle,
+    }, null);
+    errdefer self.device.destroySwapchainKHR(swapchain, null);
+    self.swapchain = swapchain;
 
     return self;
 }
@@ -246,6 +291,61 @@ fn findQueueFamilies(
     return null;
 }
 
-fn initSwapchain() void {}
-fn initCommands() void {}
-fn initSyncStructures() void {}
+fn findSurfaceFormat(
+    instance: vk.InstanceProxy,
+    pdevice: vk.PhysicalDevice,
+    surface: vk.SurfaceKHR,
+    allocator: std.mem.Allocator,
+) !vk.SurfaceFormatKHR {
+    const surface_formats = try instance.getPhysicalDeviceSurfaceFormatsAllocKHR(pdevice, surface, allocator);
+    defer allocator.free(surface_formats);
+
+    const preferred = vk.SurfaceFormatKHR{
+        .format = .b8g8r8a8_srgb,
+        .color_space = .srgb_nonlinear_khr,
+    };
+
+    for (surface_formats) |format| {
+        if (std.meta.eql(format, preferred)) {
+            return preferred;
+        }
+    }
+
+    return surface_formats[0]; // There must always be at least one supported surface format
+}
+
+fn findPresentMode(
+    instance: vk.InstanceProxy,
+    pdevice: vk.PhysicalDevice,
+    surface: vk.SurfaceKHR,
+    allocator: std.mem.Allocator,
+) !vk.PresentModeKHR {
+    const present_modes = try instance.getPhysicalDeviceSurfacePresentModesAllocKHR(pdevice, surface, allocator);
+    defer allocator.free(present_modes);
+
+    const preferred = [_]vk.PresentModeKHR{
+        .mailbox_khr,
+        .immediate_khr,
+    };
+
+    for (preferred) |mode| {
+        if (std.mem.indexOfScalar(vk.PresentModeKHR, present_modes, mode) != null) {
+            return mode;
+        }
+    }
+
+    return .fifo_khr; // Guaranteed to be available
+}
+
+fn findSwapExtent(caps: vk.SurfaceCapabilitiesKHR, screen_width: usize, screen_height: usize) vk.Extent2D {
+    if (caps.current_extent.width != 0xFFFF_FFFF) {
+        return caps.current_extent;
+    } else {
+        const actual_width: u32 = @intCast(screen_width);
+        const actual_height: u32 = @intCast(screen_height);
+        return .{
+            .width = std.math.clamp(actual_width, caps.min_image_extent.width, caps.max_image_extent.width),
+            .height = std.math.clamp(actual_height, caps.min_image_extent.height, caps.max_image_extent.height),
+        };
+    }
+}

@@ -3,7 +3,6 @@ const sdl3 = @import("sdl3");
 const vk = @import("vulkan");
 const Instance = @import("engine/instance.zig");
 const GraphicsContext = @import("engine/graphics_context.zig");
-const Swapchain = @import("engine/swapchain.zig");
 
 const FPS = 60;
 const SCREEN_WIDTH = 640;
@@ -30,11 +29,8 @@ pub fn main(init: std.process.Init) !void {
     defer instance.deinit();
 
     const sdl_surface: sdl3.vulkan.Surface = try .init(window, @ptrFromInt(@intFromEnum(instance.proxy.handle)), null);
-    var ctx: GraphicsContext = try .init(init.gpa, &instance, @enumFromInt(@intFromPtr(sdl_surface.surface)));
+    var ctx: GraphicsContext = try .init(init.gpa, &instance, @enumFromInt(@intFromPtr(sdl_surface.surface)), SCREEN_WIDTH, SCREEN_HEIGHT);
     defer ctx.deinit();
-
-    var swapchain: Swapchain = try .init(&ctx, SCREEN_WIDTH, SCREEN_HEIGHT, init.gpa);
-    defer swapchain.deinit();
 
     var quit = false;
     while (!quit) {
