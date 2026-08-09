@@ -7,14 +7,14 @@ const Instance = @This();
 allocator: std.mem.Allocator,
 // vulkan objects
 vkb: vk.BaseWrapper,
-handle: vk.InstanceProxy,
+proxy: vk.InstanceProxy,
 debug_messenger: if (builtin.mode == .Debug) vk.DebugUtilsMessengerEXT else void,
 
 pub fn deinit(self: *Instance) void {
-    if (builtin.mode == .Debug) self.handle.destroyDebugUtilsMessengerEXT(self.debug_messenger, null);
-    self.handle.destroyInstance(null);
+    if (builtin.mode == .Debug) self.proxy.destroyDebugUtilsMessengerEXT(self.debug_messenger, null);
+    self.proxy.destroyInstance(null);
     // need to destroy wrappers as well to prevent mem leaks
-    self.allocator.destroy(self.handle.wrapper);
+    self.allocator.destroy(self.proxy.wrapper);
 }
 
 pub fn init(
@@ -51,11 +51,11 @@ pub fn init(
     const vki = try self.allocator.create(vk.InstanceWrapper);
     errdefer self.allocator.destroy(vki);
     vki.* = vk.InstanceWrapper.load(instance, getInstanceProcAddr);
-    self.handle = vk.InstanceProxy.init(instance, vki);
-    errdefer self.handle.destroyInstance(null);
+    self.proxy = vk.InstanceProxy.init(instance, vki);
+    errdefer self.proxy.destroyInstance(null);
 
     if (builtin.mode == .Debug) {
-        self.debug_messenger = try self.handle.createDebugUtilsMessengerEXT(&.{
+        self.debug_messenger = try self.proxy.createDebugUtilsMessengerEXT(&.{
             .message_severity = .{
                 .warning_bit_ext = true,
                 .error_bit_ext = true,

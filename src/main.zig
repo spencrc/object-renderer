@@ -1,6 +1,7 @@
 const std = @import("std");
 const sdl3 = @import("sdl3");
 const vk = @import("vulkan");
+const Instance = @import("engine/instance.zig");
 const GraphicsContext = @import("engine/graphics_context.zig");
 const Swapchain = @import("engine/swapchain.zig");
 
@@ -25,7 +26,11 @@ pub fn main(init: std.process.Init) !void {
 
     const getInstanceProcAddr: vk.PfnGetInstanceProcAddr = @ptrCast(try sdl3.vulkan.getVkGetInstanceProcAddr());
     const sdl_exts = try sdl3.vulkan.getInstanceExtensions();
-    var ctx: GraphicsContext = try .init(init.gpa, getInstanceProcAddr, sdl_exts, window);
+    var instance: Instance = try .init(init.gpa, getInstanceProcAddr, sdl_exts);
+    defer instance.deinit();
+
+    const sdl_surface: sdl3.vulkan.Surface = try .init(window, @ptrFromInt(@intFromEnum(instance.proxy.handle)), null);
+    var ctx: GraphicsContext = try .init(init.gpa, &instance, @enumFromInt(@intFromPtr(sdl_surface.surface)));
     defer ctx.deinit();
 
     var swapchain: Swapchain = try .init(&ctx, SCREEN_WIDTH, SCREEN_HEIGHT, init.gpa);

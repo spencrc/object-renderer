@@ -14,7 +14,7 @@ pub fn init(ctx: *const Engine, screen_width: usize, screen_height: usize, alloc
     self.allocator = allocator;
     self.ctx = ctx;
 
-    const caps = try self.ctx.instance.getPhysicalDeviceSurfaceCapabilitiesKHR(self.ctx.pdevice, self.ctx.surface);
+    const caps = try self.ctx.instance.proxy.getPhysicalDeviceSurfaceCapabilitiesKHR(self.ctx.pdevice, self.ctx.surface);
     const actual_extent = findSwapExtent(caps, screen_width, screen_height);
     if (actual_extent.width == 0 or actual_extent.height == 0) {
         return error.InvalidSurfaceDimensions;
@@ -62,7 +62,7 @@ pub fn deinit(self: *Swapchain) void {
 }
 
 fn findSurfaceFormat(ctx: *const Engine, allocator: std.mem.Allocator) !vk.SurfaceFormatKHR {
-    const surface_formats = try ctx.instance.getPhysicalDeviceSurfaceFormatsAllocKHR(ctx.pdevice, ctx.surface, allocator);
+    const surface_formats = try ctx.instance.proxy.getPhysicalDeviceSurfaceFormatsAllocKHR(ctx.pdevice, ctx.surface, allocator);
     defer allocator.free(surface_formats);
 
     const preferred = vk.SurfaceFormatKHR{
@@ -80,7 +80,7 @@ fn findSurfaceFormat(ctx: *const Engine, allocator: std.mem.Allocator) !vk.Surfa
 }
 
 fn findPresentMode(ctx: *const Engine, allocator: std.mem.Allocator) !vk.PresentModeKHR {
-    const present_modes = try ctx.instance.getPhysicalDeviceSurfacePresentModesAllocKHR(ctx.pdevice, ctx.surface, allocator);
+    const present_modes = try ctx.instance.proxy.getPhysicalDeviceSurfacePresentModesAllocKHR(ctx.pdevice, ctx.surface, allocator);
     defer allocator.free(present_modes);
 
     const preferred = [_]vk.PresentModeKHR{

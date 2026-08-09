@@ -2,6 +2,7 @@ const vk = @import("vulkan");
 const std = @import("std");
 const builtin = @import("builtin");
 const sdl3 = @import("sdl3");
+const Instance = @import("instance.zig");
 
 const QueueFamilyIndices = struct {
     graphics_family_index: u32,
@@ -17,10 +18,8 @@ const DeviceCandidate = struct {
 const Engine = @This();
 
 allocator: std.mem.Allocator,
+instance: *Instance,
 // vulkan objects
-vkb: vk.BaseWrapper,
-instance: vk.InstanceProxy,
-debug_messenger: if (builtin.mode == .Debug) vk.DebugUtilsMessengerEXT else void,
 surface: vk.SurfaceKHR,
 
 pdevice: vk.PhysicalDevice,
@@ -33,73 +32,22 @@ device: vk.DeviceProxy,
 
 pub fn deinit(self: *Engine) void {
     self.device.destroyDevice(null);
-    self.instance.destroySurfaceKHR(self.surface, null);
-    if (builtin.mode == .Debug) self.instance.destroyDebugUtilsMessengerEXT(self.debug_messenger, null);
-    self.instance.destroyInstance(null);
+    self.instance.proxy.destroySurfaceKHR(self.surface, null);
     // need to destroy wrappers as well to prevent mem leaks
     self.allocator.destroy(self.device.wrapper);
-    self.allocator.destroy(self.instance.wrapper);
 }
 
 pub fn init(
     allocator: std.mem.Allocator,
-    getInstanceProcAddr: vk.PfnGetInstanceProcAddr,
-    backend_extensions: []const [*:0]const u8,
-    window: sdl3.video.Window,
+    instance: *Instance,
+    surface: vk.SurfaceKHR,
 ) !Engine {
     var self: Engine = undefined;
     self.allocator = allocator;
-    self.vkb = vk.BaseWrapper.load(getInstanceProcAddr);
+    self.instance = instance;
+    self.surface = surface;
 
-    if (try checkLayerSupport(&self.vkb, self.allocator) == false) return error.MissingLayer;
-    const required_layers = comptime getRequiredLayers();
-
-    var instances_exts: std.ArrayList([*:0]const u8) = .empty;
-    defer instances_exts.deinit(self.allocator);
-    try instances_exts.appendSlice(self.allocator, comptime getInstanceExtensions());
-    try instances_exts.appendSlice(self.allocator, backend_extensions);
-
-    const instance = try self.vkb.createInstance(&.{
-        .p_application_info = &.{
-            .p_application_name = "Example Vulkan App",
-            .application_version = vk.makeApiVersion(1, 0, 0, 0).toU32(),
-            .p_engine_name = "No Engine",
-            .engine_version = vk.makeApiVersion(1, 0, 0, 0).toU32(),
-            .api_version = vk.API_VERSION_1_3.toU32(),
-        },
-        .enabled_layer_count = @intCast(required_layers.len),
-        .pp_enabled_layer_names = required_layers.ptr,
-        .enabled_extension_count = @intCast(instances_exts.items.len),
-        .pp_enabled_extension_names = instances_exts.items.ptr,
-    }, null);
-
-    const vki = try self.allocator.create(vk.InstanceWrapper);
-    errdefer self.allocator.destroy(vki);
-    vki.* = vk.InstanceWrapper.load(instance, getInstanceProcAddr);
-    self.instance = vk.InstanceProxy.init(instance, vki);
-    errdefer self.instance.destroyInstance(null);
-
-    if (builtin.mode == .Debug) {
-        self.debug_messenger = try self.instance.createDebugUtilsMessengerEXT(&.{
-            .message_severity = .{
-                .warning_bit_ext = true,
-                .error_bit_ext = true,
-            },
-            .message_type = .{
-                .general_bit_ext = true,
-                .validation_bit_ext = true,
-                .performance_bit_ext = true,
-            },
-            .pfn_user_callback = &debugUtilsMessengerCallback,
-            .p_user_data = null,
-        }, null);
-    }
-
-    const sdl_surface: sdl3.vulkan.Surface = try .init(window, @ptrFromInt(@intFromEnum(self.instance.handle)), null);
-    self.surface = @enumFromInt(@intFromPtr(sdl_surface.surface));
-    errdefer self.instance.destroySurfaceKHR(self.surface, null);
-
-    const candidate = try pickCandidateDevice(self.instance, self.surface, self.allocator);
+    const candidate = try pickCandidateDevice(self.instance.proxy, self.surface, self.allocator);
     self.pdevice = candidate.pdevice;
     self.props = candidate.props;
     self.graphics_family_index = candidate.queues.graphics_family_index;
@@ -107,7 +55,7 @@ pub fn init(
 
     const priority = [_]f32{1};
     const required_device_extensions = comptime getRequiredDeviceExtensions();
-    const device = try self.instance.createDevice(self.pdevice, &.{
+    const device = try self.instance.proxy.createDevice(self.pdevice, &.{
         .queue_create_info_count = if (candidate.queues.graphics_family_index == candidate.queues.present_family_index) 1 else 2,
         .p_queue_create_infos = &[_]vk.DeviceQueueCreateInfo{
             .{
@@ -129,7 +77,7 @@ pub fn init(
 
     const vkd = try self.allocator.create(vk.DeviceWrapper);
     errdefer self.allocator.destroy(vkd);
-    vkd.* = vk.DeviceWrapper.load(device, self.instance.wrapper.dispatch.vkGetDeviceProcAddr.?);
+    vkd.* = vk.DeviceWrapper.load(device, self.instance.proxy.wrapper.dispatch.vkGetDeviceProcAddr.?);
     self.device = vk.DeviceProxy.init(device, vkd);
     errdefer self.device.destroyDevice(null);
 
