@@ -52,6 +52,16 @@ pub fn init(
     self.instance = instance;
     self.surface = surface;
 
+    try self.initDevice();
+    errdefer self.device.destroyDevice(null);
+
+    try self.initSwapchain(screen_width, screen_height);
+    errdefer self.device.destroySwapchainKHR(self.swapchain, null);
+
+    return self;
+}
+
+fn initDevice(self: *Engine) !void {
     const candidate = try pickCandidateDevice(self.instance.proxy, self.surface, self.allocator);
     self.pdevice = candidate.pdevice;
     self.props = candidate.props;
@@ -84,49 +94,6 @@ pub fn init(
     errdefer self.allocator.destroy(vkd);
     vkd.* = vk.DeviceWrapper.load(device, self.instance.proxy.wrapper.dispatch.vkGetDeviceProcAddr.?);
     self.device = vk.DeviceProxy.init(device, vkd);
-    errdefer self.device.destroyDevice(null);
-
-    const caps = try self.instance.proxy.getPhysicalDeviceSurfaceCapabilitiesKHR(self.pdevice, self.surface);
-    const actual_extent = findSwapExtent(caps, screen_width, screen_height);
-    if (actual_extent.width == 0 or actual_extent.height == 0) {
-        return error.InvalidSurfaceDimensions;
-    }
-
-    const format = try findSurfaceFormat(self.instance.proxy, self.pdevice, self.surface, self.allocator);
-    const present_mode = try findPresentMode(self.instance.proxy, self.pdevice, self.surface, self.allocator);
-
-    const image_count = if (caps.max_image_count > 0)
-        @min(caps.min_image_count, caps.max_image_count)
-    else
-        caps.min_image_count;
-
-    const queue_family_index = [_]u32{ self.graphics_family_index, self.present_family_index };
-    const sharing_mode: vk.SharingMode = if (self.graphics_family_index != self.present_family_index)
-        .concurrent
-    else
-        .exclusive;
-
-    const swapchain = try self.device.createSwapchainKHR(&.{
-        .surface = self.surface,
-        .min_image_count = image_count,
-        .image_format = format.format,
-        .image_color_space = format.color_space,
-        .image_extent = actual_extent,
-        .image_array_layers = 1,
-        .image_usage = .{ .color_attachment_bit = true, .transfer_dst_bit = true },
-        .image_sharing_mode = sharing_mode,
-        .queue_family_index_count = queue_family_index.len,
-        .p_queue_family_indices = &queue_family_index,
-        .pre_transform = caps.current_transform,
-        .composite_alpha = .{ .opaque_bit_khr = true },
-        .present_mode = present_mode,
-        .clipped = .true,
-        .old_swapchain = .null_handle,
-    }, null);
-    errdefer self.device.destroySwapchainKHR(swapchain, null);
-    self.swapchain = swapchain;
-
-    return self;
 }
 
 fn pickCandidateDevice(
@@ -243,6 +210,47 @@ fn findQueueFamilies(
     }
 
     return null;
+}
+
+fn initSwapchain(self: *Engine, screen_width: usize, screen_height: usize) !void {
+    const caps = try self.instance.proxy.getPhysicalDeviceSurfaceCapabilitiesKHR(self.pdevice, self.surface);
+    const actual_extent = findSwapExtent(caps, screen_width, screen_height);
+    if (actual_extent.width == 0 or actual_extent.height == 0) {
+        return error.InvalidSurfaceDimensions;
+    }
+
+    const format = try findSurfaceFormat(self.instance.proxy, self.pdevice, self.surface, self.allocator);
+    const present_mode = try findPresentMode(self.instance.proxy, self.pdevice, self.surface, self.allocator);
+
+    const image_count = if (caps.max_image_count > 0)
+        @min(caps.min_image_count, caps.max_image_count)
+    else
+        caps.min_image_count;
+
+    const queue_family_index = [_]u32{ self.graphics_family_index, self.present_family_index };
+    const sharing_mode: vk.SharingMode = if (self.graphics_family_index != self.present_family_index)
+        .concurrent
+    else
+        .exclusive;
+
+    const swapchain = try self.device.createSwapchainKHR(&.{
+        .surface = self.surface,
+        .min_image_count = image_count,
+        .image_format = format.format,
+        .image_color_space = format.color_space,
+        .image_extent = actual_extent,
+        .image_array_layers = 1,
+        .image_usage = .{ .color_attachment_bit = true, .transfer_dst_bit = true },
+        .image_sharing_mode = sharing_mode,
+        .queue_family_index_count = queue_family_index.len,
+        .p_queue_family_indices = &queue_family_index,
+        .pre_transform = caps.current_transform,
+        .composite_alpha = .{ .opaque_bit_khr = true },
+        .present_mode = present_mode,
+        .clipped = .true,
+        .old_swapchain = .null_handle,
+    }, null);
+    self.swapchain = swapchain;
 }
 
 fn findSurfaceFormat(
