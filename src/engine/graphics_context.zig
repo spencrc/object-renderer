@@ -15,7 +15,7 @@ const DeviceCandidate = struct {
     queues: QueueFamilyIndices,
 };
 
-const Engine = @This();
+const GraphicsContext = @This();
 
 allocator: std.mem.Allocator,
 instance: *Instance,
@@ -32,7 +32,7 @@ device: vk.DeviceProxy,
 
 swapchain: vk.SwapchainKHR,
 
-pub fn deinit(self: *Engine) void {
+pub fn deinit(self: *GraphicsContext) void {
     self.device.destroySwapchainKHR(self.swapchain, null);
     self.device.destroyDevice(null);
     self.instance.proxy.destroySurfaceKHR(self.surface, null);
@@ -46,8 +46,8 @@ pub fn init(
     surface: vk.SurfaceKHR,
     screen_width: usize,
     screen_height: usize,
-) !Engine {
-    var self: Engine = undefined;
+) !GraphicsContext {
+    var self: GraphicsContext = undefined;
     self.allocator = allocator;
     self.instance = instance;
     self.surface = surface;
@@ -61,7 +61,11 @@ pub fn init(
     return self;
 }
 
-fn initDevice(self: *Engine) !void {
+//**********************************************
+// DEVICE CREATIONS FNS
+//**********************************************
+
+fn initDevice(self: *GraphicsContext) !void {
     const candidate = try pickCandidateDevice(self.instance.proxy, self.surface, self.allocator);
     self.pdevice = candidate.pdevice;
     self.props = candidate.props;
@@ -212,7 +216,11 @@ fn findQueueFamilies(
     return null;
 }
 
-fn initSwapchain(self: *Engine, screen_width: usize, screen_height: usize) !void {
+//**********************************************
+// SWAPCHAIN CREATIONS FNS
+//**********************************************
+
+fn initSwapchain(self: *GraphicsContext, screen_width: usize, screen_height: usize) !void {
     const caps = try self.instance.proxy.getPhysicalDeviceSurfaceCapabilitiesKHR(self.pdevice, self.surface);
     const actual_extent = findSwapExtent(caps, screen_width, screen_height);
     if (actual_extent.width == 0 or actual_extent.height == 0) {
