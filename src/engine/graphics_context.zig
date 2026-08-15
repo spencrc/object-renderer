@@ -31,8 +31,11 @@ present_family_index: u32,
 device: vk.DeviceProxy,
 
 swapchain: vk.SwapchainKHR,
+swap_image_views: []vk.ImageView,
 
 pub fn deinit(self: *GraphicsContext) void {
+    for (self.swap_image_views) |si| self.device.destroyImageView(si, null);
+    self.allocator.free(self.swap_image_views);
     self.device.destroySwapchainKHR(self.swapchain, null);
     self.device.destroyDevice(null);
     self.instance.proxy.destroySurfaceKHR(self.surface, null);
@@ -227,7 +230,7 @@ fn initSwapchain(self: *GraphicsContext, screen_width: usize, screen_height: usi
         return error.InvalidSurfaceDimensions;
     }
 
-    const format = try findSurfaceFormat(self.instance.proxy, self.pdevice, self.surface, self.allocator);
+    const surface_format = try findSurfaceFormat(self.instance.proxy, self.pdevice, self.surface, self.allocator);
     const present_mode = try findPresentMode(self.instance.proxy, self.pdevice, self.surface, self.allocator);
 
     const image_count = if (caps.max_image_count > 0)
@@ -244,8 +247,8 @@ fn initSwapchain(self: *GraphicsContext, screen_width: usize, screen_height: usi
     const swapchain = try self.device.createSwapchainKHR(&.{
         .surface = self.surface,
         .min_image_count = image_count,
-        .image_format = format.format,
-        .image_color_space = format.color_space,
+        .image_format = surface_format.format,
+        .image_color_space = surface_format.color_space,
         .image_extent = actual_extent,
         .image_array_layers = 1,
         .image_usage = .{ .color_attachment_bit = true, .transfer_dst_bit = true },
@@ -259,6 +262,33 @@ fn initSwapchain(self: *GraphicsContext, screen_width: usize, screen_height: usi
         .old_swapchain = .null_handle,
     }, null);
     self.swapchain = swapchain;
+
+    const images = try self.device.getSwapchainImagesAllocKHR(self.swapchain, self.allocator);
+    defer self.allocator.free(images);
+
+    const image_views = try self.allocator.alloc(vk.ImageView, images.len);
+    errdefer self.allocator.free(image_views);
+
+    var i: usize = 0;
+    errdefer for (image_views[0..i]) |iv| self.device.destroyImageView(iv, null);
+
+    for (images) |image| {
+        image_views[i] = try self.device.createImageView(&.{
+            .image = image,
+            .view_type = .@"2d",
+            .format = surface_format.format,
+            .components = .{ .r = .identity, .g = .identity, .b = .identity, .a = .identity },
+            .subresource_range = .{
+                .aspect_mask = .{ .color_bit = true },
+                .base_mip_level = 0,
+                .level_count = 1,
+                .base_array_layer = 0,
+                .layer_count = 1,
+            },
+        }, null);
+        i += 1;
+    }
+    self.swap_image_views = image_views;
 }
 
 fn findSurfaceFormat(
