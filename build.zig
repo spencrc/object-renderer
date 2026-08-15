@@ -25,8 +25,25 @@ pub fn build(b: *std.Build) void {
             },
         }),
     });
-
     b.installArtifact(exe);
+
+    const vert_cmd = b.addSystemCommand(&.{
+        "glslc",
+        "--target-env=vulkan1.3",
+        "-o",
+    });
+    const vert_spv = vert_cmd.addOutputFileArg("vert.spv");
+    vert_cmd.addFileArg(b.path("shaders/main.vert"));
+    exe.root_module.addAnonymousImport("vertex_shader", .{ .root_source_file = vert_spv });
+
+    const frag_cmd = b.addSystemCommand(&.{
+        "glslc",
+        "--target-env=vulkan1.3",
+        "-o",
+    });
+    const frag_spv = frag_cmd.addOutputFileArg("frag.spv");
+    frag_cmd.addFileArg(b.path("shaders/main.frag"));
+    exe.root_module.addAnonymousImport("fragment_shader", .{ .root_source_file = frag_spv });
 
     const run_step = b.step("run", "Run the app");
 
