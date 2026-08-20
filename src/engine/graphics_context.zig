@@ -3,37 +3,10 @@ const std = @import("std");
 const builtin = @import("builtin");
 const sdl3 = @import("sdl3");
 const Instance = @import("instance.zig");
+const Vertex = @import("vertex.zig");
 
 const vert_spv align(@alignOf(u32)) = @embedFile("vertex_shader").*; // bytecode pointer is u32, hence the align
 const frag_spv align(@alignOf(u32)) = @embedFile("fragment_shader").*;
-
-const Vertex = struct {
-    const binding_description = [_]vk.VertexInputBindingDescription{
-        .{
-            .binding = 0,
-            .stride = @sizeOf(Vertex),
-            .input_rate = .vertex,
-        },
-    };
-
-    const attribute_description = [_]vk.VertexInputAttributeDescription{
-        .{
-            .binding = 0,
-            .location = 0,
-            .format = .r32g32_sfloat,
-            .offset = @offsetOf(Vertex, "pos"),
-        },
-        .{
-            .binding = 0,
-            .location = 1,
-            .format = .r32g32b32_sfloat,
-            .offset = @offsetOf(Vertex, "color"),
-        },
-    };
-
-    pos: [2]f32,
-    color: [3]f32,
-};
 
 const QueueFamilyIndices = struct {
     graphics_family_index: u32,
