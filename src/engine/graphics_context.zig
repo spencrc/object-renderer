@@ -35,6 +35,7 @@ present_family_index: u32,
 device: vk.DeviceProxy,
 
 surface_format: vk.SurfaceFormatKHR,
+actual_extent: vk.Extent2D,
 swapchain: vk.SwapchainKHR,
 swap_image_views: []vk.ImageView,
 
@@ -43,7 +44,15 @@ render_pass: vk.RenderPass,
 pipeline_layout: vk.PipelineLayout,
 pipeline: vk.Pipeline,
 
+framebuffers: []vk.Framebuffer,
+
+command_pool: vk.CommandPool,
+
 pub fn deinit(self: *GraphicsContext) void {
+    self.device.destroyCommandPool(self.command_pool, null);
+    // framebuffer
+    for (self.framebuffers) |fb| self.device.destroyFramebuffer(fb, null);
+    self.allocator.free(self.framebuffers);
     // pipeline
     self.device.destroyPipeline(self.pipeline, null);
     self.device.destroyPipelineLayout(self.pipeline_layout, null);
@@ -73,20 +82,18 @@ pub fn init(
     self.surface = surface;
 
     try self.initDevice();
-    errdefer self.device.destroyDevice(null);
-    errdefer self.instance.proxy.destroySurfaceKHR(self.surface, null);
 
     try self.initSwapchain(screen_width, screen_height);
-    errdefer for (self.swap_image_views) |si| self.device.destroyImageView(si, null);
-    errdefer self.allocator.free(self.swap_image_views);
-    errdefer self.device.destroySwapchainKHR(self.swapchain, null);
 
     try self.initRenderPass();
-    errdefer self.device.destroyRenderPass(self.render_pass, null);
 
     try self.initPipeline();
-    errdefer self.device.destroyPipelineLayout(self.pipeline_layout, null);
-    errdefer self.device.destroyPipeline(self.pipeline, null);
+
+    try self.initFramebuffer();
+
+    self.command_pool = try self.device.createCommandPool(&.{
+        .queue_family_index = self.graphics_family_index,
+    }, null);
 
     return self;
 }
@@ -316,6 +323,7 @@ fn initSwapchain(self: *GraphicsContext, screen_width: usize, screen_height: usi
     }
 
     self.surface_format = surface_format;
+    self.actual_extent = actual_extent;
     self.swapchain = swapchain;
     self.swap_image_views = image_views;
 }
@@ -546,4 +554,26 @@ fn initPipeline(self: *GraphicsContext) !void {
 
     self.pipeline_layout = pipeline_layout;
     self.pipeline = pipeline;
+}
+
+//**********************************************
+// FRAMEBUFFER CREATIONS FNS
+//**********************************************
+
+fn initFramebuffer(self: *GraphicsContext) !void {
+    const framebuffers = try self.allocator.alloc(vk.Framebuffer, self.swap_image_views.len);
+    errdefer self.allocator.free(framebuffers);
+
+    for (self.swap_image_views, 0..) |si, i| {
+        framebuffers[i] = try self.device.createFramebuffer(&.{
+            .render_pass = self.render_pass,
+            .height = self.actual_extent.height,
+            .width = self.actual_extent.width,
+            .layers = 1,
+            .p_attachments = @ptrCast(&si),
+            .attachment_count = 1,
+        }, null);
+    }
+
+    self.framebuffers = framebuffers;
 }
