@@ -8,6 +8,7 @@ const Vertex = @import("vertex.zig");
 const vert_spv align(@alignOf(u32)) = @embedFile("vertex_shader").*; // bytecode pointer is u32, hence the align
 const frag_spv align(@alignOf(u32)) = @embedFile("fragment_shader").*;
 const depth_format = vk.Format.d32_sfloat;
+const max_frames_in_flight = 2;
 
 const QueueFamilyIndices = struct {
     graphics_family_index: u32,
@@ -18,6 +19,12 @@ const DeviceCandidate = struct {
     pdevice: vk.PhysicalDevice,
     props: vk.PhysicalDeviceProperties,
     queues: QueueFamilyIndices,
+};
+
+const FrameResources = struct {
+    command_pool: vk.CommandPool, // per frame resource command pool = faster command buffer reset
+    command_buffer: vk.CommandBuffer,
+    image_acquired_sempahore: vk.Semaphore, // used to block rendering until able to present (go-ahead from GPU)
 };
 
 const GraphicsContext = @This();
@@ -47,15 +54,19 @@ render_pass: vk.RenderPass,
 pipeline_layout: vk.PipelineLayout,
 pipeline: vk.Pipeline,
 
-framebuffers: []vk.Framebuffer,
-
-command_pool: vk.CommandPool,
+timeline_semaphore: vk.Semaphore,
+frame_resources: [max_frames_in_flight]FrameResources,
 
 pub fn deinit(self: *GraphicsContext) void {
-    self.device.destroyCommandPool(self.command_pool, null);
-    // framebuffer
-    for (self.framebuffers) |fb| self.device.destroyFramebuffer(fb, null);
-    self.gpa.free(self.framebuffers);
+    self.device.deviceWaitIdle() catch @panic("failed to wait for device to idle!");
+
+    // sync and frame resources
+    for (self.frame_resources) |res| {
+        self.device.freeCommandBuffers(res.command_pool, &.{res.command_buffer});
+        self.device.destroyCommandPool(res.command_pool, null);
+        self.device.destroySemaphore(res.image_acquired_sempahore, null);
+    }
+    self.device.destroySemaphore(self.timeline_semaphore, null);
     // pipeline
     self.device.destroyPipeline(self.pipeline, null);
     self.device.destroyPipelineLayout(self.pipeline_layout, null);
@@ -97,11 +108,16 @@ pub fn init(
 
     try self.initPipeline();
 
-    try self.initFramebuffer();
-
-    self.command_pool = try self.device.createCommandPool(&.{
-        .queue_family_index = self.graphics_family_index,
+    const semaphore_type_info = vk.SemaphoreTypeCreateInfo{
+        .semaphore_type = .timeline,
+        .initial_value = max_frames_in_flight,
+    };
+    self.timeline_semaphore = try self.device.createSemaphore(&.{
+        .p_next = &semaphore_type_info,
     }, null);
+    errdefer self.device.destroySemaphore(self.timeline_semaphore, null);
+
+    try self.initFrameResources();
 
     return self;
 }
@@ -134,9 +150,25 @@ fn initDevice(self: *GraphicsContext) !void {
     self.graphics_family_index = candidate.queues.graphics_family_index;
     self.present_family_index = candidate.queues.present_family_index;
 
+    var feats14 = vk.PhysicalDeviceVulkan14Features{};
+    var feats13 = vk.PhysicalDeviceVulkan13Features{
+        .p_next = &feats14,
+        .synchronization_2 = .true,
+        .dynamic_rendering = .true,
+    };
+    var feats12 = vk.PhysicalDeviceVulkan12Features{
+        .p_next = &feats13,
+        .timeline_semaphore = .true,
+    };
+    const feats = vk.PhysicalDeviceFeatures2{
+        .p_next = &feats12,
+        .features = .{},
+    };
+
     const priority = [_]f32{1};
     const required_device_extensions = comptime getRequiredDeviceExtensions();
     const device = try self.instance.proxy.createDevice(self.pdevice, &.{
+        .p_next = &feats,
         .queue_create_info_count = if (candidate.queues.graphics_family_index == candidate.queues.present_family_index) 1 else 2,
         .p_queue_create_infos = &[_]vk.DeviceQueueCreateInfo{
             .{
@@ -682,4 +714,31 @@ fn initFramebuffer(self: *GraphicsContext) !void {
     }
 
     self.framebuffers = framebuffers;
+}
+
+fn initFrameResources(self: *GraphicsContext) !void {
+    var frame_resources: [max_frames_in_flight]FrameResources = undefined;
+    for (&frame_resources) |*res| {
+        const image_acquired_semaphore = try self.device.createSemaphore(&.{}, null);
+        errdefer self.device.destroySemaphore(image_acquired_semaphore, null);
+
+        const command_pool = try self.device.createCommandPool(&.{
+            .queue_family_index = self.graphics_family_index,
+        }, null);
+        errdefer self.device.destroyCommandPool(command_pool, null);
+
+        var command_buffer: vk.CommandBuffer = undefined;
+        try self.device.allocateCommandBuffers(&.{
+            .command_pool = command_pool,
+            .level = .primary,
+            .command_buffer_count = 1,
+        }, @ptrCast(&command_buffer));
+
+        res.* = .{
+            .image_acquired_sempahore = image_acquired_semaphore,
+            .command_pool = command_pool,
+            .command_buffer = command_buffer,
+        };
+    }
+    self.frame_resources = frame_resources;
 }
