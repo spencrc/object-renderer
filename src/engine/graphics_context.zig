@@ -22,9 +22,8 @@ const DeviceCandidate = struct {
 
 const GraphicsContext = @This();
 
-allocator: std.mem.Allocator,
+gpa: std.mem.Allocator,
 instance: *Instance,
-// vulkan objects
 surface: vk.SurfaceKHR,
 
 pdevice: vk.PhysicalDevice,
@@ -56,7 +55,7 @@ pub fn deinit(self: *GraphicsContext) void {
     self.device.destroyCommandPool(self.command_pool, null);
     // framebuffer
     for (self.framebuffers) |fb| self.device.destroyFramebuffer(fb, null);
-    self.allocator.free(self.framebuffers);
+    self.gpa.free(self.framebuffers);
     // pipeline
     self.device.destroyPipeline(self.pipeline, null);
     self.device.destroyPipelineLayout(self.pipeline_layout, null);
@@ -67,15 +66,15 @@ pub fn deinit(self: *GraphicsContext) void {
     self.device.freeMemory(self.depth_image_mem, null);
     self.device.destroyImage(self.depth_image, null);
     for (self.render_complete_semaphores) |s| self.device.destroySemaphore(s, null);
-    self.allocator.free(self.render_complete_semaphores);
+    self.gpa.free(self.render_complete_semaphores);
     for (self.swap_image_views) |si| self.device.destroyImageView(si, null);
-    self.allocator.free(self.swap_image_views);
+    self.gpa.free(self.swap_image_views);
     self.device.destroySwapchainKHR(self.swapchain, null);
     // device
     self.device.destroyDevice(null);
     self.instance.proxy.destroySurfaceKHR(self.surface, null);
     // need to destroy wrappers as well to prevent mem leaks
-    self.allocator.destroy(self.device.wrapper);
+    self.gpa.destroy(self.device.wrapper);
 }
 
 pub fn init(
@@ -86,7 +85,7 @@ pub fn init(
     screen_height: usize,
 ) !GraphicsContext {
     var self: GraphicsContext = undefined;
-    self.allocator = allocator;
+    self.gpa = allocator;
     self.instance = instance;
     self.surface = surface;
 
@@ -129,7 +128,7 @@ pub fn allocate(self: GraphicsContext, requirements: vk.MemoryRequirements, flag
 //**********************************************
 
 fn initDevice(self: *GraphicsContext) !void {
-    const candidate = try pickCandidateDevice(self.instance.proxy, self.surface, self.allocator);
+    const candidate = try pickCandidateDevice(self.instance.proxy, self.surface, self.gpa);
     self.pdevice = candidate.pdevice;
     self.props = candidate.props;
     self.graphics_family_index = candidate.queues.graphics_family_index;
@@ -157,8 +156,8 @@ fn initDevice(self: *GraphicsContext) !void {
         .pp_enabled_layer_names = undefined,
     }, null);
 
-    const vkd = try self.allocator.create(vk.DeviceWrapper);
-    errdefer self.allocator.destroy(vkd);
+    const vkd = try self.gpa.create(vk.DeviceWrapper);
+    errdefer self.gpa.destroy(vkd);
     vkd.* = vk.DeviceWrapper.load(device, self.instance.proxy.wrapper.dispatch.vkGetDeviceProcAddr.?);
     self.device = vk.DeviceProxy.init(device, vkd);
     self.mem_props = self.instance.proxy.getPhysicalDeviceMemoryProperties(self.pdevice);
@@ -291,8 +290,8 @@ fn initSwapchain(self: *GraphicsContext, screen_width: usize, screen_height: usi
         return error.InvalidSurfaceDimensions;
     }
 
-    const surface_format = try findSurfaceFormat(self.instance.proxy, self.pdevice, self.surface, self.allocator);
-    const present_mode = try findPresentMode(self.instance.proxy, self.pdevice, self.surface, self.allocator);
+    const surface_format = try findSurfaceFormat(self.instance.proxy, self.pdevice, self.surface, self.gpa);
+    const present_mode = try findPresentMode(self.instance.proxy, self.pdevice, self.surface, self.gpa);
 
     const image_count = if (caps.max_image_count > 0)
         @min(caps.min_image_count, caps.max_image_count)
@@ -323,14 +322,14 @@ fn initSwapchain(self: *GraphicsContext, screen_width: usize, screen_height: usi
         .old_swapchain = .null_handle,
     }, null);
 
-    const images = try self.device.getSwapchainImagesAllocKHR(swapchain, self.allocator);
-    defer self.allocator.free(images);
+    const images = try self.device.getSwapchainImagesAllocKHR(swapchain, self.gpa);
+    defer self.gpa.free(images);
 
-    const image_views = try self.allocator.alloc(vk.ImageView, images.len);
-    errdefer self.allocator.free(image_views);
+    const image_views = try self.gpa.alloc(vk.ImageView, images.len);
+    errdefer self.gpa.free(image_views);
 
-    const render_complete_semaphores = try self.allocator.alloc(vk.Semaphore, images.len);
-    errdefer self.allocator.free(render_complete_semaphores);
+    const render_complete_semaphores = try self.gpa.alloc(vk.Semaphore, images.len);
+    errdefer self.gpa.free(render_complete_semaphores);
 
     var i: usize = 0;
     errdefer for (image_views[0..i]) |iv| self.device.destroyImageView(iv, null);
@@ -668,8 +667,8 @@ fn initPipeline(self: *GraphicsContext) !void {
 //**********************************************
 
 fn initFramebuffer(self: *GraphicsContext) !void {
-    const framebuffers = try self.allocator.alloc(vk.Framebuffer, self.swap_image_views.len);
-    errdefer self.allocator.free(framebuffers);
+    const framebuffers = try self.gpa.alloc(vk.Framebuffer, self.swap_image_views.len);
+    errdefer self.gpa.free(framebuffers);
 
     for (self.swap_image_views, 0..) |si, i| {
         framebuffers[i] = try self.device.createFramebuffer(&.{

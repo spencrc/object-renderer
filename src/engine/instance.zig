@@ -4,7 +4,7 @@ const builtin = @import("builtin");
 
 const Instance = @This();
 
-allocator: std.mem.Allocator,
+gpa: std.mem.Allocator,
 // vulkan objects
 vkb: vk.BaseWrapper,
 proxy: vk.InstanceProxy,
@@ -14,7 +14,7 @@ pub fn deinit(self: *Instance) void {
     if (builtin.mode == .Debug) self.proxy.destroyDebugUtilsMessengerEXT(self.debug_messenger, null);
     self.proxy.destroyInstance(null);
     // need to destroy wrappers as well to prevent mem leaks
-    self.allocator.destroy(self.proxy.wrapper);
+    self.gpa.destroy(self.proxy.wrapper);
 }
 
 pub fn init(
@@ -23,16 +23,16 @@ pub fn init(
     backend_extensions: []const [*:0]const u8,
 ) !Instance {
     var self: Instance = undefined;
-    self.allocator = allocator;
+    self.gpa = allocator;
     self.vkb = vk.BaseWrapper.load(getInstanceProcAddr);
 
-    if (try checkLayerSupport(&self.vkb, self.allocator) == false) return error.MissingLayer;
+    if (try checkLayerSupport(&self.vkb, self.gpa) == false) return error.MissingLayer;
     const required_layers = comptime getRequiredLayers();
 
     var instances_exts: std.ArrayList([*:0]const u8) = .empty;
-    defer instances_exts.deinit(self.allocator);
-    try instances_exts.appendSlice(self.allocator, comptime getInstanceExtensions());
-    try instances_exts.appendSlice(self.allocator, backend_extensions);
+    defer instances_exts.deinit(self.gpa);
+    try instances_exts.appendSlice(self.gpa, comptime getInstanceExtensions());
+    try instances_exts.appendSlice(self.gpa, backend_extensions);
 
     const instance = try self.vkb.createInstance(&.{
         .p_application_info = &.{
@@ -48,8 +48,8 @@ pub fn init(
         .pp_enabled_extension_names = instances_exts.items.ptr,
     }, null);
 
-    const vki = try self.allocator.create(vk.InstanceWrapper);
-    errdefer self.allocator.destroy(vki);
+    const vki = try self.gpa.create(vk.InstanceWrapper);
+    errdefer self.gpa.destroy(vki);
     vki.* = vk.InstanceWrapper.load(instance, getInstanceProcAddr);
     self.proxy = vk.InstanceProxy.init(instance, vki);
     errdefer self.proxy.destroyInstance(null);
