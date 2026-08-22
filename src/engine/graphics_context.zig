@@ -28,16 +28,18 @@ surface: vk.SurfaceKHR,
 
 pdevice: vk.PhysicalDevice,
 props: vk.PhysicalDeviceProperties,
-
 graphics_family_index: u32,
 present_family_index: u32,
-
 device: vk.DeviceProxy,
+mem_props: vk.PhysicalDeviceMemoryProperties,
 
 surface_format: vk.SurfaceFormatKHR,
 actual_extent: vk.Extent2D,
 swapchain: vk.SwapchainKHR,
 swap_image_views: []vk.ImageView,
+render_complete_semaphores: []vk.Semaphore,
+depth_image: vk.Image,
+depth_image_mem: vk.DeviceMemory,
 
 render_pass: vk.RenderPass,
 
@@ -59,6 +61,10 @@ pub fn deinit(self: *GraphicsContext) void {
     // render pass
     self.device.destroyRenderPass(self.render_pass, null);
     // swapchain
+    self.device.freeMemory(self.depth_image_mem, null);
+    self.device.destroyImage(self.depth_image, null);
+    for (self.render_complete_semaphores) |s| self.device.destroySemaphore(s, null);
+    self.allocator.free(self.render_complete_semaphores);
     for (self.swap_image_views) |si| self.device.destroyImageView(si, null);
     self.allocator.free(self.swap_image_views);
     self.device.destroySwapchainKHR(self.swapchain, null);
@@ -98,6 +104,23 @@ pub fn init(
     return self;
 }
 
+pub fn findMemoryTypeIndex(self: GraphicsContext, memory_types: u32, flags: vk.MemoryPropertyFlags) !u32 {
+    for (self.mem_props.memory_types[0..self.mem_props.memory_type_count], 0..) |mem_type, i| {
+        if (memory_types & (@as(u32, 1) << @truncate(i)) != 0 and mem_type.property_flags.contains(flags)) {
+            return @truncate(i);
+        }
+    }
+
+    return error.NoSuitableMemoryType;
+}
+
+pub fn allocate(self: GraphicsContext, requirements: vk.MemoryRequirements, flags: vk.MemoryPropertyFlags) !vk.DeviceMemory {
+    return try self.device.allocateMemory(&.{
+        .allocation_size = requirements.size,
+        .memory_type_index = try self.findMemoryTypeIndex(requirements.memory_type_bits, flags),
+    }, null);
+}
+
 //**********************************************
 // DEVICE CREATIONS FNS
 //**********************************************
@@ -135,6 +158,7 @@ fn initDevice(self: *GraphicsContext) !void {
     errdefer self.allocator.destroy(vkd);
     vkd.* = vk.DeviceWrapper.load(device, self.instance.proxy.wrapper.dispatch.vkGetDeviceProcAddr.?);
     self.device = vk.DeviceProxy.init(device, vkd);
+    self.mem_props = self.instance.proxy.getPhysicalDeviceMemoryProperties(self.pdevice);
 }
 
 fn pickCandidateDevice(
@@ -302,6 +326,9 @@ fn initSwapchain(self: *GraphicsContext, screen_width: usize, screen_height: usi
     const image_views = try self.allocator.alloc(vk.ImageView, images.len);
     errdefer self.allocator.free(image_views);
 
+    const render_complete_semaphores = try self.allocator.alloc(vk.Semaphore, images.len);
+    errdefer self.allocator.free(render_complete_semaphores);
+
     var i: usize = 0;
     errdefer for (image_views[0..i]) |iv| self.device.destroyImageView(iv, null);
 
@@ -319,13 +346,36 @@ fn initSwapchain(self: *GraphicsContext, screen_width: usize, screen_height: usi
                 .layer_count = 1,
             },
         }, null);
+
+        render_complete_semaphores[i] = try self.device.createSemaphore(&.{}, null);
+
         i += 1;
     }
+
+    const depth_image = try self.device.createImage(&.{
+        .image_type = .@"2d",
+        .format = .d32_sfloat,
+        .extent = .{ .width = actual_extent.width, .height = actual_extent.height, .depth = 1 },
+        .mip_levels = 1,
+        .array_layers = 1,
+        .samples = .{ .@"1_bit" = true },
+        .tiling = .optimal,
+        .usage = .{ .depth_stencil_attachment_bit = true },
+        .initial_layout = .undefined,
+        .sharing_mode = .exclusive,
+    }, null);
+    errdefer self.device.destroyImage(depth_image, null);
+    const image_mem_reqs = self.device.getImageMemoryRequirements(depth_image);
+    const image_mem = try self.allocate(image_mem_reqs, .{ .device_local_bit = true });
+    try self.device.bindImageMemory(depth_image, image_mem, 0);
 
     self.surface_format = surface_format;
     self.actual_extent = actual_extent;
     self.swapchain = swapchain;
     self.swap_image_views = image_views;
+    self.render_complete_semaphores = render_complete_semaphores;
+    self.depth_image = depth_image;
+    self.depth_image_mem = image_mem;
 }
 
 fn findSurfaceFormat(
