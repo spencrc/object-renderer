@@ -55,31 +55,37 @@ gpa: std.mem.Allocator,
 instance: *const Instance,
 surface: vk.SurfaceKHR,
 
-pdevice: vk.PhysicalDevice,
-graphics_family_index: u32,
-present_family_index: u32,
-device: vk.DeviceProxy,
-mem_props: vk.PhysicalDeviceMemoryProperties,
+pdevice: vk.PhysicalDevice = .null_handle,
+graphics_family_index: u32 = std.math.maxInt(u32),
+present_family_index: u32 = std.math.maxInt(u32),
+mem_props: vk.PhysicalDeviceMemoryProperties = undefined,
+device: vk.DeviceProxy = undefined,
+graphics_queue: vk.Queue = .null_handle,
 
-swapchain: Swapchain,
+swapchain: Swapchain = undefined,
 
-pipeline_layout: vk.PipelineLayout,
-pipeline: vk.Pipeline,
+pipeline_layout: vk.PipelineLayout = .null_handle,
+pipeline: vk.Pipeline = .null_handle,
 
-timeline_semaphore: vk.Semaphore,
-frame_resources: [max_frames_in_flight]FrameResources,
+timeline_semaphore: vk.Semaphore = .null_handle,
+frame_resources: [max_frames_in_flight]FrameResources = undefined,
+
+recreate_swapchain: bool = false,
+frame_index: u32 = 0,
+next_signal_value: u64 = max_frames_in_flight + 1,
 
 pub fn init(
-    allocator: std.mem.Allocator,
     instance: *const Instance,
     surface: vk.SurfaceKHR,
     screen_width: usize,
     screen_height: usize,
+    gpa: std.mem.Allocator,
 ) !GraphicsContext {
-    var self: GraphicsContext = undefined;
-    self.gpa = allocator;
-    self.instance = instance;
-    self.surface = surface;
+    var self = GraphicsContext{
+        .gpa = gpa,
+        .instance = instance,
+        .surface = surface,
+    };
 
     try self.initDevice();
     errdefer self.deinitDevice();
@@ -174,6 +180,8 @@ fn initDevice(self: *GraphicsContext) !void {
     vkd.* = vk.DeviceWrapper.load(device, self.instance.proxy.wrapper.dispatch.vkGetDeviceProcAddr.?);
     self.device = vk.DeviceProxy.init(device, vkd);
     self.mem_props = self.instance.proxy.getPhysicalDeviceMemoryProperties(self.pdevice);
+
+    self.graphics_queue = self.device.getDeviceQueue(self.graphics_family_index, 0);
 }
 
 fn pickCandidateDevice(
@@ -346,10 +354,10 @@ fn initPipeline(self: *GraphicsContext) !void {
     };
 
     const vertex_input_info = vk.PipelineVertexInputStateCreateInfo{
-        .p_vertex_binding_descriptions = &Vertex.binding_description,
-        .vertex_binding_description_count = Vertex.binding_description.len,
-        .p_vertex_attribute_descriptions = &Vertex.attribute_description,
-        .vertex_attribute_description_count = Vertex.attribute_description.len,
+        // .p_vertex_binding_descriptions = &Vertex.binding_description,
+        // .vertex_binding_description_count = Vertex.binding_description.len,
+        // .p_vertex_attribute_descriptions = &Vertex.attribute_description,
+        // .vertex_attribute_description_count = Vertex.attribute_description.len,
     };
 
     const input_assembly_info = vk.PipelineInputAssemblyStateCreateInfo{
@@ -398,7 +406,7 @@ fn initPipeline(self: *GraphicsContext) !void {
         .polygon_mode = .fill,
         .line_width = 1.0,
         .cull_mode = .{ .back_bit = true },
-        .front_face = .clockwise,
+        .front_face = .counter_clockwise,
         .depth_bias_enable = .false,
         .depth_bias_constant_factor = 0,
         .depth_bias_clamp = 0,
@@ -513,4 +521,224 @@ fn deinitFrameResources(self: *GraphicsContext) void {
         self.device.destroyCommandPool(res.command_pool, null);
         self.device.destroySemaphore(res.image_acquired_semaphore, null);
     }
+}
+
+/// To be called inside application loop to actually draw!
+pub fn render(self: *GraphicsContext, screen_width: usize, screen_height: usize) !void {
+    if (self.recreate_swapchain) {
+        try self.swapchain.recreate(self, screen_width, screen_height);
+        self.recreate_swapchain = false;
+    }
+
+    const frame_resource_index: u32 = self.frame_index % max_frames_in_flight;
+    self.frame_index += 1;
+
+    const signal_value: u64 = self.next_signal_value;
+    self.next_signal_value += 1;
+
+    const wait_value: u64 = signal_value - max_frames_in_flight;
+
+    _ = try self.device.waitSemaphores(&.{
+        .semaphore_count = 1,
+        .p_semaphores = &[_]vk.Semaphore{self.timeline_semaphore},
+        .p_values = &[_]u64{wait_value},
+    }, std.math.maxInt(u64));
+    // Q: for the first two frames, what happens? don't they have nothing to wait on?
+    // A: actually, they do! the signal will be for the third frame for the first frame.
+    // then, the third frame will re-use the first frame's resources as its wait value will be 3.
+
+    const res = self.frame_resources[frame_resource_index];
+    try self.device.resetCommandPool(res.command_pool, .{});
+
+    const acquire_result = self.device.acquireNextImageKHR(self.swapchain.handle, std.math.maxInt(u64), res.image_acquired_semaphore, .null_handle) catch |err| switch (err) {
+        error.OutOfDateKHR => {
+            self.recreate_swapchain = true;
+            return;
+        },
+        else => return err,
+    };
+    switch (acquire_result.result) {
+        .suboptimal_khr => self.recreate_swapchain = true,
+        .success => {},
+        else => unreachable,
+    }
+    const image_index = acquire_result.image_index;
+
+    // begin recording commands
+    try self.device.beginCommandBuffer(res.command_buffer, &.{
+        .flags = .{ .one_time_submit_bit = true },
+    });
+
+    // barriers establish dependencies for stages in the Vulkan pipeline
+    const layout_barriers = [_]vk.ImageMemoryBarrier2{
+        .{
+            .src_stage_mask = .{ .color_attachment_output_bit = true },
+            .src_access_mask = .{}, // don't care if we're blocking reads or writes
+            .dst_stage_mask = .{ .color_attachment_output_bit = true },
+            .dst_access_mask = .{ .color_attachment_write_bit = true }, // writes allowed when transition done
+            .old_layout = .undefined,
+            .new_layout = .color_attachment_optimal,
+            .image = self.swapchain.swap_images[image_index],
+            .subresource_range = .{
+                .aspect_mask = .{ .color_bit = true },
+                .base_mip_level = 0, // swapchain image, no sampling will be done.
+                .level_count = 1,
+                .base_array_layer = 0, // swapchain image, there's just 1 image.
+                .layer_count = 1,
+            },
+            .src_queue_family_index = vk.QUEUE_FAMILY_IGNORED,
+            .dst_queue_family_index = vk.QUEUE_FAMILY_IGNORED,
+        },
+        .{
+            .src_stage_mask = .{ .early_fragment_tests_bit = true },
+            .src_access_mask = .{},
+            .dst_stage_mask = .{ .early_fragment_tests_bit = true, .late_fragment_tests_bit = true },
+            .dst_access_mask = .{ .depth_stencil_attachment_write_bit = true },
+            .old_layout = .undefined,
+            .new_layout = .depth_attachment_optimal,
+            .image = self.swapchain.depth_image,
+            .subresource_range = .{
+                .aspect_mask = .{ .depth_bit = true },
+                .base_mip_level = 0,
+                .level_count = 1,
+                .base_array_layer = 0,
+                .layer_count = 1,
+            },
+            .src_queue_family_index = vk.QUEUE_FAMILY_IGNORED,
+            .dst_queue_family_index = vk.QUEUE_FAMILY_IGNORED,
+        },
+    };
+    self.device.cmdPipelineBarrier2(res.command_buffer, &.{
+        .image_memory_barrier_count = layout_barriers.len,
+        .p_image_memory_barriers = &layout_barriers,
+    });
+
+    // setup attachments (color and depth) and begin dynamic rendering
+    const color_attach_info = vk.RenderingAttachmentInfo{
+        .image_view = self.swapchain.swap_image_views[image_index],
+        .image_layout = .color_attachment_optimal,
+        .load_op = .clear, // clear the image on load
+        .store_op = .store, // keep data for presentation
+        .clear_value = .{ .color = .{ .float_32 = .{ 0.1, 0.1, 0.1, 1.0 } } },
+        .resolve_mode = .{},
+        .resolve_image_layout = .undefined,
+    };
+    const depth_attach_info = vk.RenderingAttachmentInfo{
+        .image_view = self.swapchain.depth_image_view,
+        .image_layout = .depth_attachment_optimal,
+        .load_op = .clear,
+        .store_op = .dont_care,
+        .clear_value = .{ .depth_stencil = .{ .depth = 1.0, .stencil = 0.0 } },
+        .resolve_mode = .{},
+        .resolve_image_layout = .undefined,
+    };
+    const rendering_info = vk.RenderingInfo{
+        .render_area = .{
+            .offset = .{ .x = 0, .y = 0 },
+            .extent = .{ .width = self.swapchain.extent.width, .height = self.swapchain.extent.height },
+        },
+        .layer_count = 1,
+        .color_attachment_count = 1,
+        .p_color_attachments = &[_]vk.RenderingAttachmentInfo{color_attach_info},
+        .p_depth_attachment = &depth_attach_info,
+        .view_mask = 0,
+    };
+
+    // record dynamic rendering commands
+    self.device.cmdBeginRendering(res.command_buffer, &rendering_info);
+    {
+        const viewport = vk.Viewport{
+            .x = 0.0,
+            .y = 0.0,
+            .width = @floatFromInt(self.swapchain.extent.width),
+            .height = @floatFromInt(self.swapchain.extent.height),
+            .min_depth = 0.0,
+            .max_depth = 1.0,
+        };
+        self.device.cmdSetViewport(res.command_buffer, 0, &[_]vk.Viewport{viewport});
+
+        // scissor test allows discarding areas outside of display region
+        const scissor = vk.Rect2D{
+            .offset = .{ .x = 0, .y = 0 },
+            .extent = .{ .width = self.swapchain.extent.width, .height = self.swapchain.extent.height },
+        };
+        self.device.cmdSetScissor(res.command_buffer, 0, &[_]vk.Rect2D{scissor});
+
+        self.device.cmdBindPipeline(res.command_buffer, .graphics, self.pipeline);
+        self.device.cmdDraw(res.command_buffer, 3, 1, 0, 0);
+    }
+    self.device.cmdEndRendering(res.command_buffer);
+
+    // transition image from color attachment to presentation
+    const present_layout_barriers = [_]vk.ImageMemoryBarrier2{
+        .{
+            .src_stage_mask = .{ .color_attachment_output_bit = true },
+            .src_access_mask = .{ .color_attachment_write_bit = true },
+            .dst_stage_mask = .{}, // none. cache is flushed & layout transitioned
+            .dst_access_mask = .{},
+            .old_layout = .color_attachment_optimal,
+            .new_layout = .present_src_khr,
+            .image = self.swapchain.swap_images[image_index],
+            .subresource_range = .{
+                .aspect_mask = .{ .color_bit = true },
+                .base_mip_level = 0,
+                .level_count = 1,
+                .base_array_layer = 0,
+                .layer_count = 1,
+            },
+            .src_queue_family_index = vk.QUEUE_FAMILY_IGNORED,
+            .dst_queue_family_index = vk.QUEUE_FAMILY_IGNORED,
+        },
+    };
+    self.device.cmdPipelineBarrier2(res.command_buffer, &.{
+        .image_memory_barrier_count = present_layout_barriers.len,
+        .p_image_memory_barriers = &present_layout_barriers,
+    });
+
+    try self.device.endCommandBuffer(res.command_buffer);
+
+    // ensure swapchain image is actually viable to start colour output
+    const image_acquire_wait_info = vk.SemaphoreSubmitInfo{
+        .semaphore = res.image_acquired_semaphore,
+        .value = 0, // ignored since it's not a timeline semaphore
+        .stage_mask = .{ .color_attachment_output_bit = true }, // wait before drawing to image
+        .device_index = 0,
+    };
+    // signal the image can be presented
+    const semaphore_signals = [_]vk.SemaphoreSubmitInfo{
+        .{ // render work completion signal
+            .semaphore = self.swapchain.render_complete_semaphores[image_index],
+            .value = 0,
+            .stage_mask = .{ .all_graphics_bit = true },
+            .device_index = 0,
+        },
+        .{ // entire frame completed (timeline)
+            .semaphore = self.timeline_semaphore,
+            .value = signal_value,
+            .stage_mask = .{ .all_commands_bit = true },
+            .device_index = 0,
+        },
+    };
+    const cmd_submit_info = vk.CommandBufferSubmitInfo{
+        .command_buffer = res.command_buffer,
+        .device_mask = 0,
+    };
+    const submit_info = vk.SubmitInfo2{
+        .wait_semaphore_info_count = 1,
+        .p_wait_semaphore_infos = &[_]vk.SemaphoreSubmitInfo{image_acquire_wait_info},
+        .command_buffer_info_count = 1,
+        .p_command_buffer_infos = &[_]vk.CommandBufferSubmitInfo{cmd_submit_info},
+        .signal_semaphore_info_count = semaphore_signals.len,
+        .p_signal_semaphore_infos = &semaphore_signals,
+    };
+    try self.device.queueSubmit2(self.graphics_queue, &[_]vk.SubmitInfo2{submit_info}, .null_handle);
+
+    // present the image
+    _ = try self.device.queuePresentKHR(self.graphics_queue, &vk.PresentInfoKHR{
+        .wait_semaphore_count = 1,
+        .p_wait_semaphores = &[_]vk.Semaphore{self.swapchain.render_complete_semaphores[image_index]},
+        .swapchain_count = 1,
+        .p_swapchains = &[_]vk.SwapchainKHR{self.swapchain.handle},
+        .p_image_indices = &[_]u32{image_index},
+    });
 }

@@ -11,6 +11,7 @@ gpa: std.mem.Allocator,
 handle: vk.SwapchainKHR,
 surface_format: vk.SurfaceFormatKHR,
 extent: vk.Extent2D,
+swap_images: []vk.Image,
 swap_image_views: []vk.ImageView,
 render_complete_semaphores: []vk.Semaphore,
 depth_image: vk.Image,
@@ -69,18 +70,23 @@ fn initRecycle(gc: *const GraphicsContext, screen_width: usize, screen_height: u
     const images = try gc.device.getSwapchainImagesAllocKHR(swapchain, gpa);
     defer gpa.free(images);
 
-    const image_views = try gpa.alloc(vk.ImageView, images.len);
-    errdefer gpa.free(image_views);
+    const swap_images = try gpa.alloc(vk.Image, images.len);
+    errdefer gpa.free(swap_images);
+
+    const swap_image_views = try gpa.alloc(vk.ImageView, images.len);
+    errdefer gpa.free(swap_image_views);
 
     const render_complete_semaphores = try gpa.alloc(vk.Semaphore, images.len);
     errdefer gpa.free(render_complete_semaphores);
 
     var i: usize = 0;
-    errdefer for (image_views[0..i]) |iv| gc.device.destroyImageView(iv, null);
+    errdefer for (swap_image_views[0..i]) |siv| gc.device.destroyImageView(siv, null);
     errdefer for (render_complete_semaphores[0..i]) |rcs| gc.device.destroySemaphore(rcs, null);
 
     for (images) |image| {
-        image_views[i] = try gc.device.createImageView(&.{
+        swap_images[i] = image;
+
+        swap_image_views[i] = try gc.device.createImageView(&.{
             .image = image,
             .view_type = .@"2d",
             .format = surface_format.format,
@@ -137,7 +143,8 @@ fn initRecycle(gc: *const GraphicsContext, screen_width: usize, screen_height: u
         .surface_format = surface_format,
         .extent = actual_extent,
         .handle = swapchain,
-        .swap_image_views = image_views,
+        .swap_images = swap_images,
+        .swap_image_views = swap_image_views,
         .render_complete_semaphores = render_complete_semaphores,
         .depth_image = depth_image,
         .depth_image_mem = image_mem,
@@ -165,8 +172,10 @@ fn deinitExceptSwapchain(self: *Swapchain, gc: *const GraphicsContext) void {
     gc.device.destroyImage(self.depth_image, null);
     for (self.render_complete_semaphores) |s| gc.device.destroySemaphore(s, null);
     self.gpa.free(self.render_complete_semaphores);
-    for (self.swap_image_views) |si| gc.device.destroyImageView(si, null);
+    for (self.swap_image_views) |siv| gc.device.destroyImageView(siv, null);
     self.gpa.free(self.swap_image_views);
+    // swap_images owned by swapchain itself, and will be cleaned when swapchain destroyed
+    self.gpa.free(self.swap_images);
 }
 
 pub fn deinit(self: *Swapchain, gc: *const GraphicsContext) void {

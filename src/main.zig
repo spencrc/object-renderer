@@ -19,6 +19,7 @@ pub fn main(init: std.process.Init) !void {
 
     const window_flags = sdl3.video.Window.Flags{
         .vulkan = true,
+        .resizable = true,
     };
     var window: sdl3.video.Window = try .init("Hello Vulkan", SCREEN_WIDTH, SCREEN_HEIGHT, window_flags);
     defer window.deinit();
@@ -29,17 +30,25 @@ pub fn main(init: std.process.Init) !void {
     defer instance.deinit();
 
     const sdl_surface: sdl3.vulkan.Surface = try .init(window, @ptrFromInt(@intFromEnum(instance.proxy.handle)), null);
-    var ctx: GraphicsContext = try .init(init.gpa, &instance, @enumFromInt(@intFromPtr(sdl_surface.surface)), SCREEN_WIDTH, SCREEN_HEIGHT);
+    var ctx: GraphicsContext = try .init(&instance, @enumFromInt(@intFromPtr(sdl_surface.surface)), SCREEN_WIDTH, SCREEN_HEIGHT, init.gpa);
     defer ctx.deinit();
 
     var quit = false;
+    var w: usize = SCREEN_WIDTH;
+    var h: usize = SCREEN_HEIGHT;
     while (!quit) {
         // Event logic.
         while (sdl3.events.poll()) |event|
             switch (event) {
                 .quit => quit = true,
                 .terminating => quit = true,
+                .window_resized => |window_resized| {
+                    w = @intCast(window_resized.width);
+                    h = @intCast(window_resized.height);
+                },
                 else => {},
             };
+
+        try ctx.render(w, h);
     }
 }
