@@ -1,7 +1,6 @@
 const vk = @import("vulkan");
 const std = @import("std");
 const builtin = @import("builtin");
-const sdl3 = @import("sdl3");
 const Instance = @import("instance.zig");
 const Vertex = @import("vertex.zig");
 const Swapchain = @import("swapchain.zig");
@@ -21,6 +20,29 @@ const DeviceCandidate = struct {
     queues: QueueFamilyIndices,
 };
 
+const RequiredFeatures = struct {
+    feats14: vk.PhysicalDeviceVulkan14Features = .{},
+    feats13: vk.PhysicalDeviceVulkan13Features = .{
+        .synchronization_2 = .true,
+        .dynamic_rendering = .true,
+    },
+    feats12: vk.PhysicalDeviceVulkan12Features = .{
+        .timeline_semaphore = .true,
+    },
+
+    fn chain(rf: *RequiredFeatures) vk.PhysicalDeviceFeatures2 {
+        rf.feats12.p_next = &rf.feats13;
+        rf.feats13.p_next = &rf.feats14;
+        return .{ .p_next = &rf.feats12, .features = .{} };
+    }
+
+    fn isSupported(rf: *const RequiredFeatures) bool {
+        return rf.feats13.synchronization_2 == .true and
+            rf.feats13.dynamic_rendering == .true and
+            rf.feats12.timeline_semaphore == .true;
+    }
+};
+
 const FrameResources = struct {
     command_pool: vk.CommandPool, // per frame resource command pool = faster command buffer reset
     command_buffer: vk.CommandBuffer,
@@ -34,7 +56,6 @@ instance: *Instance,
 surface: vk.SurfaceKHR,
 
 pdevice: vk.PhysicalDevice,
-props: vk.PhysicalDeviceProperties,
 graphics_family_index: u32,
 present_family_index: u32,
 device: vk.DeviceProxy,
@@ -119,29 +140,15 @@ pub fn allocate(self: *const GraphicsContext, requirements: vk.MemoryRequirement
 fn initDevice(self: *GraphicsContext) !void {
     const candidate = try pickCandidateDevice(self.instance.proxy, self.surface, self.gpa);
     self.pdevice = candidate.pdevice;
-    self.props = candidate.props;
     self.graphics_family_index = candidate.queues.graphics_family_index;
     self.present_family_index = candidate.queues.present_family_index;
 
-    var feats14 = vk.PhysicalDeviceVulkan14Features{};
-    var feats13 = vk.PhysicalDeviceVulkan13Features{
-        .p_next = &feats14,
-        .synchronization_2 = .true,
-        .dynamic_rendering = .true,
-    };
-    var feats12 = vk.PhysicalDeviceVulkan12Features{
-        .p_next = &feats13,
-        .timeline_semaphore = .true,
-    };
-    const feats = vk.PhysicalDeviceFeatures2{
-        .p_next = &feats12,
-        .features = .{},
-    };
-
     const priority = [_]f32{1};
+    var required_features = RequiredFeatures{};
+    const feats2 = required_features.chain();
     const required_device_extensions = comptime getRequiredDeviceExtensions();
     const device = try self.instance.proxy.createDevice(self.pdevice, &.{
-        .p_next = &feats,
+        .p_next = &feats2,
         .queue_create_info_count = if (candidate.queues.graphics_family_index == candidate.queues.present_family_index) 1 else 2,
         .p_queue_create_infos = &[_]vk.DeviceQueueCreateInfo{
             .{
@@ -196,6 +203,8 @@ fn getDeviceCandidate(
 
     if (!try checkDeviceSurfaceSupport(pdevice, instance, surface)) return null;
 
+    if (!checkDeviceFeaturesSupport(pdevice, instance)) return null;
+
     if (try findQueueFamilies(pdevice, instance, surface, allocator)) |queue_families| {
         const props = instance.getPhysicalDeviceProperties(pdevice);
         return DeviceCandidate{
@@ -249,6 +258,13 @@ fn checkDeviceSurfaceSupport(
     _ = try instance.getPhysicalDeviceSurfacePresentModesKHR(pdevice, surface, &present_mode_count, null);
 
     return format_count > 0 and present_mode_count > 0;
+}
+
+fn checkDeviceFeaturesSupport(pdevice: vk.PhysicalDevice, instance: vk.InstanceProxy) bool {
+    var req = RequiredFeatures{};
+    var feats = req.chain();
+    instance.getPhysicalDeviceFeatures2(pdevice, &feats);
+    return req.isSupported();
 }
 
 fn findQueueFamilies(
@@ -446,7 +462,6 @@ fn initPipeline(self: *GraphicsContext) !void {
         .p_color_blend_state = &color_blending_info,
         .p_dynamic_state = &dynamic_states_info,
         .layout = pipeline_layout,
-        .render_pass = self.render_pass,
         .subpass = 0,
         .base_pipeline_handle = .null_handle,
         .base_pipeline_index = -1,
