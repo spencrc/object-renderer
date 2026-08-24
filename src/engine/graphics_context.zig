@@ -4,10 +4,10 @@ const builtin = @import("builtin");
 const sdl3 = @import("sdl3");
 const Instance = @import("instance.zig");
 const Vertex = @import("vertex.zig");
+const Swapchain = @import("swapchain.zig");
 
 const vert_spv align(@alignOf(u32)) = @embedFile("vertex_shader").*; // bytecode pointer is u32, hence the align
 const frag_spv align(@alignOf(u32)) = @embedFile("fragment_shader").*;
-const depth_format = vk.Format.d32_sfloat;
 const max_frames_in_flight = 2;
 
 const QueueFamilyIndices = struct {
@@ -24,7 +24,7 @@ const DeviceCandidate = struct {
 const FrameResources = struct {
     command_pool: vk.CommandPool, // per frame resource command pool = faster command buffer reset
     command_buffer: vk.CommandBuffer,
-    image_acquired_sempahore: vk.Semaphore, // used to block rendering until able to present (go-ahead from GPU)
+    image_acquired_semaphore: vk.Semaphore, // used to block rendering until able to present (go-ahead from GPU)
 };
 
 const GraphicsContext = @This();
@@ -40,53 +40,13 @@ present_family_index: u32,
 device: vk.DeviceProxy,
 mem_props: vk.PhysicalDeviceMemoryProperties,
 
-surface_format: vk.SurfaceFormatKHR,
-actual_extent: vk.Extent2D,
-swapchain: vk.SwapchainKHR,
-swap_image_views: []vk.ImageView,
-render_complete_semaphores: []vk.Semaphore,
-depth_image: vk.Image,
-depth_image_mem: vk.DeviceMemory,
-depth_image_view: vk.ImageView,
-
-render_pass: vk.RenderPass,
+swapchain: Swapchain,
 
 pipeline_layout: vk.PipelineLayout,
 pipeline: vk.Pipeline,
 
 timeline_semaphore: vk.Semaphore,
 frame_resources: [max_frames_in_flight]FrameResources,
-
-pub fn deinit(self: *GraphicsContext) void {
-    self.device.deviceWaitIdle() catch @panic("failed to wait for device to idle!");
-
-    // sync and frame resources
-    for (self.frame_resources) |res| {
-        self.device.freeCommandBuffers(res.command_pool, &.{res.command_buffer});
-        self.device.destroyCommandPool(res.command_pool, null);
-        self.device.destroySemaphore(res.image_acquired_sempahore, null);
-    }
-    self.device.destroySemaphore(self.timeline_semaphore, null);
-    // pipeline
-    self.device.destroyPipeline(self.pipeline, null);
-    self.device.destroyPipelineLayout(self.pipeline_layout, null);
-    // render pass
-    self.device.destroyRenderPass(self.render_pass, null);
-    // swapchain
-    self.device.destroyImageView(self.depth_image_view, null);
-    self.device.freeMemory(self.depth_image_mem, null);
-    self.device.destroyImage(self.depth_image, null);
-    for (self.render_complete_semaphores) |s| self.device.destroySemaphore(s, null);
-    self.gpa.free(self.render_complete_semaphores);
-    for (self.swap_image_views) |si| self.device.destroyImageView(si, null);
-    self.gpa.free(self.swap_image_views);
-    self.device.destroySwapchainKHR(self.swapchain, null);
-    // device
-    self.device.destroyDevice(null);
-    self.instance.proxy.destroySurfaceKHR(self.surface, null);
-    // need to destroy wrappers as well to prevent mem leaks
-    self.gpa.destroy(self.device.wrapper);
-}
 
 pub fn init(
     allocator: std.mem.Allocator,
@@ -101,12 +61,13 @@ pub fn init(
     self.surface = surface;
 
     try self.initDevice();
+    errdefer self.deinitDevice();
 
-    try self.initSwapchain(screen_width, screen_height);
-
-    try self.initRenderPass();
+    self.swapchain = try .init(&self, screen_width, screen_height, self.gpa);
+    errdefer self.swapchain.deinit(&self);
 
     try self.initPipeline();
+    errdefer self.deinitPipeline();
 
     const semaphore_type_info = vk.SemaphoreTypeCreateInfo{
         .semaphore_type = .timeline,
@@ -118,11 +79,26 @@ pub fn init(
     errdefer self.device.destroySemaphore(self.timeline_semaphore, null);
 
     try self.initFrameResources();
+    errdefer self.deinitFrameResources();
 
     return self;
 }
 
-pub fn findMemoryTypeIndex(self: GraphicsContext, memory_types: u32, flags: vk.MemoryPropertyFlags) !u32 {
+pub fn deinit(self: *GraphicsContext) void {
+    self.device.deviceWaitIdle() catch @panic("failed to wait for device to idle!");
+
+    self.deinitFrameResources();
+
+    self.device.destroySemaphore(self.timeline_semaphore, null);
+
+    self.deinitPipeline();
+
+    self.swapchain.deinit(self);
+
+    self.deinitDevice();
+}
+
+pub fn findMemoryTypeIndex(self: *const GraphicsContext, memory_types: u32, flags: vk.MemoryPropertyFlags) !u32 {
     for (self.mem_props.memory_types[0..self.mem_props.memory_type_count], 0..) |mem_type, i| {
         if (memory_types & (@as(u32, 1) << @truncate(i)) != 0 and mem_type.property_flags.contains(flags)) {
             return @truncate(i);
@@ -132,17 +108,14 @@ pub fn findMemoryTypeIndex(self: GraphicsContext, memory_types: u32, flags: vk.M
     return error.NoSuitableMemoryType;
 }
 
-pub fn allocate(self: GraphicsContext, requirements: vk.MemoryRequirements, flags: vk.MemoryPropertyFlags) !vk.DeviceMemory {
+pub fn allocate(self: *const GraphicsContext, requirements: vk.MemoryRequirements, flags: vk.MemoryPropertyFlags) !vk.DeviceMemory {
     return try self.device.allocateMemory(&.{
         .allocation_size = requirements.size,
         .memory_type_index = try self.findMemoryTypeIndex(requirements.memory_type_bits, flags),
     }, null);
 }
 
-//**********************************************
-// DEVICE CREATIONS FNS
-//**********************************************
-
+/// Initializes device from supported physical device for Graphics Context
 fn initDevice(self: *GraphicsContext) !void {
     const candidate = try pickCandidateDevice(self.instance.proxy, self.surface, self.gpa);
     self.pdevice = candidate.pdevice;
@@ -187,6 +160,7 @@ fn initDevice(self: *GraphicsContext) !void {
         .enabled_layer_count = 0,
         .pp_enabled_layer_names = undefined,
     }, null);
+    errdefer self.device.destroyDevice(null);
 
     const vkd = try self.gpa.create(vk.DeviceWrapper);
     errdefer self.gpa.destroy(vkd);
@@ -311,224 +285,15 @@ fn findQueueFamilies(
     return null;
 }
 
-//**********************************************
-// SWAPCHAIN CREATIONS FNS
-//**********************************************
-
-fn initSwapchain(self: *GraphicsContext, screen_width: usize, screen_height: usize) !void {
-    const caps = try self.instance.proxy.getPhysicalDeviceSurfaceCapabilitiesKHR(self.pdevice, self.surface);
-    const actual_extent = findSwapExtent(caps, screen_width, screen_height);
-    if (actual_extent.width == 0 or actual_extent.height == 0) {
-        return error.InvalidSurfaceDimensions;
-    }
-
-    const surface_format = try findSurfaceFormat(self.instance.proxy, self.pdevice, self.surface, self.gpa);
-    const present_mode = try findPresentMode(self.instance.proxy, self.pdevice, self.surface, self.gpa);
-
-    const image_count = if (caps.max_image_count > 0)
-        @min(caps.min_image_count, caps.max_image_count)
-    else
-        caps.min_image_count;
-
-    const queue_family_index = [_]u32{ self.graphics_family_index, self.present_family_index };
-    const sharing_mode: vk.SharingMode = if (self.graphics_family_index != self.present_family_index)
-        .concurrent
-    else
-        .exclusive;
-
-    const swapchain = try self.device.createSwapchainKHR(&.{
-        .surface = self.surface,
-        .min_image_count = image_count,
-        .image_format = surface_format.format,
-        .image_color_space = surface_format.color_space,
-        .image_extent = actual_extent,
-        .image_array_layers = 1,
-        .image_usage = .{ .color_attachment_bit = true, .transfer_dst_bit = true },
-        .image_sharing_mode = sharing_mode,
-        .queue_family_index_count = queue_family_index.len,
-        .p_queue_family_indices = &queue_family_index,
-        .pre_transform = caps.current_transform,
-        .composite_alpha = .{ .opaque_bit_khr = true },
-        .present_mode = present_mode,
-        .clipped = .true,
-        .old_swapchain = .null_handle,
-    }, null);
-
-    const images = try self.device.getSwapchainImagesAllocKHR(swapchain, self.gpa);
-    defer self.gpa.free(images);
-
-    const image_views = try self.gpa.alloc(vk.ImageView, images.len);
-    errdefer self.gpa.free(image_views);
-
-    const render_complete_semaphores = try self.gpa.alloc(vk.Semaphore, images.len);
-    errdefer self.gpa.free(render_complete_semaphores);
-
-    var i: usize = 0;
-    errdefer for (image_views[0..i]) |iv| self.device.destroyImageView(iv, null);
-
-    for (images) |image| {
-        image_views[i] = try self.device.createImageView(&.{
-            .image = image,
-            .view_type = .@"2d",
-            .format = surface_format.format,
-            .components = .{ .r = .identity, .g = .identity, .b = .identity, .a = .identity },
-            .subresource_range = .{
-                .aspect_mask = .{ .color_bit = true },
-                .base_mip_level = 0,
-                .level_count = 1,
-                .base_array_layer = 0,
-                .layer_count = 1,
-            },
-        }, null);
-
-        render_complete_semaphores[i] = try self.device.createSemaphore(&.{}, null);
-
-        i += 1;
-    }
-
-    const depth_image = try self.device.createImage(&.{
-        .image_type = .@"2d",
-        .format = depth_format,
-        .extent = .{ .width = actual_extent.width, .height = actual_extent.height, .depth = 1 },
-        .mip_levels = 1,
-        .array_layers = 1,
-        .samples = .{ .@"1_bit" = true },
-        .tiling = .optimal,
-        .usage = .{ .depth_stencil_attachment_bit = true },
-        .initial_layout = .undefined,
-        .sharing_mode = .exclusive,
-    }, null);
-    errdefer self.device.destroyImage(depth_image, null);
-    const image_mem_reqs = self.device.getImageMemoryRequirements(depth_image);
-    const image_mem = try self.allocate(image_mem_reqs, .{ .device_local_bit = true });
-    errdefer self.device.freeMemory(image_mem, null);
-    try self.device.bindImageMemory(depth_image, image_mem, 0);
-
-    const depth_image_view = try self.device.createImageView(&.{
-        .image = depth_image,
-        .view_type = .@"2d",
-        .format = depth_format,
-        .components = .{ .r = .identity, .g = .identity, .b = .identity, .a = .identity },
-        .subresource_range = .{
-            .aspect_mask = .{ .depth_bit = true },
-            .base_mip_level = 0,
-            .level_count = 1,
-            .base_array_layer = 0,
-            .layer_count = 1,
-        },
-    }, null);
-
-    self.surface_format = surface_format;
-    self.actual_extent = actual_extent;
-    self.swapchain = swapchain;
-    self.swap_image_views = image_views;
-    self.render_complete_semaphores = render_complete_semaphores;
-    self.depth_image = depth_image;
-    self.depth_image_mem = image_mem;
-    self.depth_image_view = depth_image_view;
+fn deinitDevice(self: *GraphicsContext) void {
+    // device
+    self.device.destroyDevice(null);
+    self.instance.proxy.destroySurfaceKHR(self.surface, null);
+    // need to destroy wrappers as well to prevent mem leaks
+    self.gpa.destroy(self.device.wrapper);
 }
 
-fn findSurfaceFormat(
-    instance: vk.InstanceProxy,
-    pdevice: vk.PhysicalDevice,
-    surface: vk.SurfaceKHR,
-    allocator: std.mem.Allocator,
-) !vk.SurfaceFormatKHR {
-    const surface_formats = try instance.getPhysicalDeviceSurfaceFormatsAllocKHR(pdevice, surface, allocator);
-    defer allocator.free(surface_formats);
-
-    const preferred = vk.SurfaceFormatKHR{
-        .format = .b8g8r8a8_srgb,
-        .color_space = .srgb_nonlinear_khr,
-    };
-
-    for (surface_formats) |format| {
-        if (std.meta.eql(format, preferred)) {
-            return preferred;
-        }
-    }
-
-    return surface_formats[0]; // There must always be at least one supported surface format
-}
-
-fn findPresentMode(
-    instance: vk.InstanceProxy,
-    pdevice: vk.PhysicalDevice,
-    surface: vk.SurfaceKHR,
-    allocator: std.mem.Allocator,
-) !vk.PresentModeKHR {
-    const present_modes = try instance.getPhysicalDeviceSurfacePresentModesAllocKHR(pdevice, surface, allocator);
-    defer allocator.free(present_modes);
-
-    const preferred = [_]vk.PresentModeKHR{
-        .mailbox_khr,
-        .immediate_khr,
-    };
-
-    for (preferred) |mode| {
-        if (std.mem.indexOfScalar(vk.PresentModeKHR, present_modes, mode) != null) {
-            return mode;
-        }
-    }
-
-    return .fifo_khr; // Guaranteed to be available
-}
-
-fn findSwapExtent(caps: vk.SurfaceCapabilitiesKHR, screen_width: usize, screen_height: usize) vk.Extent2D {
-    if (caps.current_extent.width != 0xFFFF_FFFF) {
-        return caps.current_extent;
-    } else {
-        const actual_width: u32 = @intCast(screen_width);
-        const actual_height: u32 = @intCast(screen_height);
-        return .{
-            .width = std.math.clamp(actual_width, caps.min_image_extent.width, caps.max_image_extent.width),
-            .height = std.math.clamp(actual_height, caps.min_image_extent.height, caps.max_image_extent.height),
-        };
-    }
-}
-
-//**********************************************
-// RENDER PASS CREATIONS FNS
-//**********************************************
-
-/// Creates the render pass object, which stores info about framebuffer attachments to be used while rendering
-fn initRenderPass(self: *GraphicsContext) !void {
-    const color_attachment = vk.AttachmentDescription{
-        .format = self.surface_format.format,
-        .samples = .{ .@"1_bit" = true },
-        .initial_layout = .undefined,
-        .final_layout = .present_src_khr,
-        // determines what we do before and after rendering:
-        .load_op = .clear,
-        .store_op = .store,
-        // determines what stencil buffer data to apply:
-        .stencil_load_op = .dont_care,
-        .stencil_store_op = .dont_care,
-    };
-
-    const color_attachment_ref = vk.AttachmentReference{
-        .attachment = 0,
-        .layout = .color_attachment_optimal,
-    };
-
-    const subpass = vk.SubpassDescription{
-        .pipeline_bind_point = .graphics,
-        .color_attachment_count = 1,
-        .p_color_attachments = @ptrCast(&color_attachment_ref),
-    };
-
-    self.render_pass = try self.device.createRenderPass(&.{
-        .attachment_count = 1,
-        .p_attachments = @ptrCast(&color_attachment),
-        .subpass_count = 1,
-        .p_subpasses = @ptrCast(&subpass),
-    }, null);
-}
-
-//**********************************************
-// PIPELINE CREATIONS FNS
-//**********************************************
-
+/// Initializes graphics pipeline for GraphicsContext
 fn initPipeline(self: *GraphicsContext) !void {
     const pipeline_layout = try self.device.createPipelineLayout(&.{
         .flags = .{},
@@ -661,8 +426,8 @@ fn initPipeline(self: *GraphicsContext) !void {
     // enable dynamic rendering
     const render_info = vk.PipelineRenderingCreateInfo{
         .color_attachment_count = 1,
-        .p_color_attachment_formats = &[_]vk.Format{self.surface_format.format},
-        .depth_attachment_format = depth_format,
+        .p_color_attachment_formats = &[_]vk.Format{self.swapchain.surface_format.format},
+        .depth_attachment_format = Swapchain.depth_format,
         .stencil_attachment_format = .undefined,
         .view_mask = 0,
     };
@@ -694,28 +459,12 @@ fn initPipeline(self: *GraphicsContext) !void {
     self.pipeline = pipeline;
 }
 
-//**********************************************
-// FRAMEBUFFER CREATIONS FNS
-//**********************************************
-
-fn initFramebuffer(self: *GraphicsContext) !void {
-    const framebuffers = try self.gpa.alloc(vk.Framebuffer, self.swap_image_views.len);
-    errdefer self.gpa.free(framebuffers);
-
-    for (self.swap_image_views, 0..) |si, i| {
-        framebuffers[i] = try self.device.createFramebuffer(&.{
-            .render_pass = self.render_pass,
-            .height = self.actual_extent.height,
-            .width = self.actual_extent.width,
-            .layers = 1,
-            .p_attachments = @ptrCast(&si),
-            .attachment_count = 1,
-        }, null);
-    }
-
-    self.framebuffers = framebuffers;
+fn deinitPipeline(self: *GraphicsContext) void {
+    self.device.destroyPipeline(self.pipeline, null);
+    self.device.destroyPipelineLayout(self.pipeline_layout, null);
 }
 
+/// Initializes array of frame resources for GraphicsContext
 fn initFrameResources(self: *GraphicsContext) !void {
     var frame_resources: [max_frames_in_flight]FrameResources = undefined;
     for (&frame_resources) |*res| {
@@ -735,10 +484,18 @@ fn initFrameResources(self: *GraphicsContext) !void {
         }, @ptrCast(&command_buffer));
 
         res.* = .{
-            .image_acquired_sempahore = image_acquired_semaphore,
+            .image_acquired_semaphore = image_acquired_semaphore,
             .command_pool = command_pool,
             .command_buffer = command_buffer,
         };
     }
     self.frame_resources = frame_resources;
+}
+
+fn deinitFrameResources(self: *GraphicsContext) void {
+    for (self.frame_resources) |res| {
+        self.device.freeCommandBuffers(res.command_pool, &.{res.command_buffer});
+        self.device.destroyCommandPool(res.command_pool, null);
+        self.device.destroySemaphore(res.image_acquired_semaphore, null);
+    }
 }
