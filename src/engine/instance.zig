@@ -91,20 +91,20 @@ fn checkLayerSupport(vkb: *const vk.BaseWrapper, allocator: std.mem.Allocator) !
     return true;
 }
 
-const EMPTY_NAMES = [_][*:0]const u8{};
-const DEBUG_REQUIRED_LAYERS = [_][*:0]const u8{"VK_LAYER_KHRONOS_validation"}; // will be DCE'd if not in Debug or ReleaseSafe
+const empty_names = [_][*:0]const u8{};
+const debug_required_layers = [_][*:0]const u8{"VK_LAYER_KHRONOS_validation"}; // will be DCE'd if not in Debug or ReleaseSafe
 fn getRequiredLayers() []const [*:0]const u8 {
     return switch (builtin.mode) {
-        .Debug, .ReleaseSafe => &DEBUG_REQUIRED_LAYERS,
-        else => &EMPTY_NAMES,
+        .Debug, .ReleaseSafe => &empty_names,
+        else => &empty_names,
     };
 }
 
-const DEBUG_INSTANCE_EXTS = [_][*:0]const u8{vk.extensions.ext_debug_utils.name}; // will be DCE'd if not in Debug or ReleaseSafe
+const debug_instance_exts = [_][*:0]const u8{vk.extensions.ext_debug_utils.name}; // will be DCE'd if not in Debug or ReleaseSafe
 fn getInstanceExtensions() []const [*:0]const u8 {
     return switch (builtin.mode) {
-        .Debug, .ReleaseSafe => &DEBUG_INSTANCE_EXTS,
-        else => &EMPTY_NAMES,
+        .Debug, .ReleaseSafe => &debug_instance_exts,
+        else => &empty_names,
     };
 }
 

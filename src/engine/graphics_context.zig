@@ -52,7 +52,7 @@ const FrameResources = struct {
 const GraphicsContext = @This();
 
 gpa: std.mem.Allocator,
-instance: *Instance,
+instance: *const Instance,
 surface: vk.SurfaceKHR,
 
 pdevice: vk.PhysicalDevice,
@@ -71,7 +71,7 @@ frame_resources: [max_frames_in_flight]FrameResources,
 
 pub fn init(
     allocator: std.mem.Allocator,
-    instance: *Instance,
+    instance: *const Instance,
     surface: vk.SurfaceKHR,
     screen_width: usize,
     screen_height: usize,
@@ -239,10 +239,10 @@ fn checkDeviceExtensionSupport(
     return true;
 }
 
-const REQUIRED_DEVICE_EXTS = [_][*:0]const u8{vk.extensions.khr_swapchain.name};
+const required_device_exts = [_][*:0]const u8{vk.extensions.khr_swapchain.name};
 fn getRequiredDeviceExtensions() []const [*:0]const u8 {
     return switch (builtin.mode) {
-        else => return &REQUIRED_DEVICE_EXTS,
+        else => return &required_device_exts,
     };
 }
 
@@ -346,9 +346,9 @@ fn initPipeline(self: *GraphicsContext) !void {
     };
 
     const vertex_input_info = vk.PipelineVertexInputStateCreateInfo{
-        .p_vertex_binding_descriptions = @ptrCast(&Vertex.binding_description),
-        .vertex_binding_description_count = 1,
-        .p_vertex_attribute_descriptions = @ptrCast(&Vertex.attribute_description),
+        .p_vertex_binding_descriptions = &Vertex.binding_description,
+        .vertex_binding_description_count = Vertex.binding_description.len,
+        .p_vertex_attribute_descriptions = &Vertex.attribute_description,
         .vertex_attribute_description_count = Vertex.attribute_description.len,
     };
 
@@ -428,7 +428,7 @@ fn initPipeline(self: *GraphicsContext) !void {
         .logic_op_enable = .false,
         .logic_op = .copy,
         .attachment_count = 1,
-        .p_attachments = @ptrCast(&color_blend_attachment),
+        .p_attachments = &[_]vk.PipelineColorBlendAttachmentState{color_blend_attachment},
         .blend_constants = [_]f32{ 0, 0, 0, 0 },
     };
 
