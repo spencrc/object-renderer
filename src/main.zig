@@ -49,6 +49,6 @@ pub fn main(init: std.process.Init) !void {
                 else => {},
             };
 
-        try ctx.render(w, h);
+        if (w > 0 and h > 0) try ctx.render(w, h);
     }
 }
