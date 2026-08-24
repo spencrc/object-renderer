@@ -564,6 +564,9 @@ pub fn render(self: *GraphicsContext, screen_width: usize, screen_height: usize)
     }
     const image_index = acquire_result.image_index;
 
+    const swapchain_width = self.swapchain.extent.width;
+    const swapchain_height = self.swapchain.extent.height;
+
     // begin recording commands
     try self.device.beginCommandBuffer(res.command_buffer, &.{
         .flags = .{ .one_time_submit_bit = true },
@@ -635,7 +638,7 @@ pub fn render(self: *GraphicsContext, screen_width: usize, screen_height: usize)
     const rendering_info = vk.RenderingInfo{
         .render_area = .{
             .offset = .{ .x = 0, .y = 0 },
-            .extent = .{ .width = self.swapchain.extent.width, .height = self.swapchain.extent.height },
+            .extent = .{ .width = swapchain_width, .height = swapchain_height },
         },
         .layer_count = 1,
         .color_attachment_count = 1,
@@ -650,8 +653,8 @@ pub fn render(self: *GraphicsContext, screen_width: usize, screen_height: usize)
         const viewport = vk.Viewport{
             .x = 0.0,
             .y = 0.0,
-            .width = @floatFromInt(self.swapchain.extent.width),
-            .height = @floatFromInt(self.swapchain.extent.height),
+            .width = @floatFromInt(swapchain_width),
+            .height = @floatFromInt(swapchain_height),
             .min_depth = 0.0,
             .max_depth = 1.0,
         };
@@ -660,7 +663,7 @@ pub fn render(self: *GraphicsContext, screen_width: usize, screen_height: usize)
         // scissor test allows discarding areas outside of display region
         const scissor = vk.Rect2D{
             .offset = .{ .x = 0, .y = 0 },
-            .extent = .{ .width = self.swapchain.extent.width, .height = self.swapchain.extent.height },
+            .extent = .{ .width = swapchain_width, .height = swapchain_height },
         };
         self.device.cmdSetScissor(res.command_buffer, 0, &[_]vk.Rect2D{scissor});
 
