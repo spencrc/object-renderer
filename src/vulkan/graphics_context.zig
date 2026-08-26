@@ -4,6 +4,7 @@ const builtin = @import("builtin");
 const Instance = @import("instance.zig");
 const Vertex = @import("vertex.zig");
 const Swapchain = @import("swapchain.zig");
+const Buffer = @import("Buffer.zig");
 
 const vert_spv align(@alignOf(u32)) = @embedFile("vertex_shader").*; // bytecode pointer is u32, hence the align
 const frag_spv align(@alignOf(u32)) = @embedFile("fragment_shader").*;
@@ -56,11 +57,6 @@ const FrameResources = struct {
     command_pool: vk.CommandPool, // per frame resource command pool = faster command buffer reset
     command_buffer: vk.CommandBuffer,
     image_acquired_semaphore: vk.Semaphore, // used to block rendering until able to present (go-ahead from GPU)
-};
-
-const Buffer = struct {
-    handle: vk.Buffer,
-    memory: vk.DeviceMemory,
 };
 
 const GraphicsContext = @This();
@@ -132,21 +128,23 @@ pub fn init(
     }, null);
     defer self.device.destroyCommandPool(command_pool, null);
 
-    self.vertex_buffer = try self.initBuffer(
+    self.vertex_buffer = try .init(
+        &self,
         @sizeOf(@TypeOf(vertices)),
         .{ .transfer_dst_bit = true, .vertex_buffer_bit = true },
         .{ .device_local_bit = true },
     );
-    errdefer self.deinitBuffer(self.vertex_buffer);
-    try self.uploadTo(command_pool, self.vertex_buffer, Vertex, &vertices);
+    errdefer self.vertex_buffer.deinit(&self);
+    try self.vertex_buffer.uploadTo(&self, command_pool, Vertex, &vertices);
 
-    self.index_buffer = try self.initBuffer(
+    self.index_buffer = try .init(
+        &self,
         @sizeOf(@TypeOf(indices)),
         .{ .transfer_dst_bit = true, .index_buffer_bit = true },
         .{ .device_local_bit = true },
     );
-    errdefer self.deinitBuffer(self.index_buffer);
-    try self.uploadTo(command_pool, self.index_buffer, u16, &indices);
+    errdefer self.index_buffer.deinit(&self);
+    try self.index_buffer.uploadTo(&self, command_pool, u16, &indices);
 
     return self;
 }
@@ -154,8 +152,8 @@ pub fn init(
 pub fn deinit(self: *GraphicsContext) void {
     self.device.deviceWaitIdle() catch @panic("failed to wait for device to idle!");
 
-    self.deinitBuffer(self.vertex_buffer);
-    self.deinitBuffer(self.index_buffer);
+    self.vertex_buffer.deinit(self);
+    self.index_buffer.deinit(self);
 
     self.deinitFrameResources();
 
@@ -566,82 +564,6 @@ fn deinitFrameResources(self: *GraphicsContext) void {
         self.device.destroyCommandPool(res.command_pool, null);
         self.device.destroySemaphore(res.image_acquired_semaphore, null);
     }
-}
-
-/// Helper method that returns a struct containing the VkBuffer and VkDeviceMemory objects for a buffer
-fn initBuffer(self: *GraphicsContext, size: vk.DeviceSize, usage: vk.BufferUsageFlags, properties: vk.MemoryPropertyFlags) !Buffer {
-    const buffer = try self.device.createBuffer(&.{
-        .size = size,
-        .usage = usage,
-        .sharing_mode = .exclusive,
-    }, null);
-    errdefer self.device.destroyBuffer(buffer, null);
-    const mem_reqs = self.device.getBufferMemoryRequirements(buffer);
-    const mem = try self.allocate(mem_reqs, properties);
-    errdefer self.device.freeMemory(mem, null);
-    try self.device.bindBufferMemory(buffer, mem, 0);
-    return .{
-        .handle = buffer,
-        .memory = mem,
-    };
-}
-
-fn deinitBuffer(self: *GraphicsContext, buffer: Buffer) void {
-    self.device.freeMemory(buffer.memory, null);
-    self.device.destroyBuffer(buffer.handle, null);
-}
-
-/// Takes objects of type T and copys them into the provided buffer
-fn uploadTo(self: *GraphicsContext, command_pool: vk.CommandPool, dst: Buffer, comptime T: type, objects: []const T) !void {
-    const size = @sizeOf(T) * objects.len;
-    const staging_buffer = try self.initBuffer(
-        size,
-        .{ .transfer_src_bit = true },
-        .{ .host_visible_bit = true, .host_coherent_bit = true },
-    );
-    errdefer self.deinitBuffer(staging_buffer);
-
-    {
-        const data = try self.device.mapMemory(staging_buffer.memory, 0, vk.WHOLE_SIZE, .{});
-        defer self.device.unmapMemory(staging_buffer.memory);
-
-        const gpu_objects: [*]T = @ptrCast(@alignCast(data));
-        @memcpy(gpu_objects, objects[0..]);
-    }
-
-    try self.copyBuffer(command_pool, staging_buffer, dst, size);
-}
-
-fn copyBuffer(self: *GraphicsContext, command_pool: vk.CommandPool, src: Buffer, dst: Buffer, size: vk.DeviceSize) !void {
-    var command_buffer: vk.CommandBuffer = undefined;
-    try self.device.allocateCommandBuffers(&.{
-        .command_pool = command_pool,
-        .level = .primary,
-        .command_buffer_count = 1,
-    }, @ptrCast(&command_buffer));
-    defer self.device.freeCommandBuffers(command_pool, &.{command_buffer});
-
-    try self.device.beginCommandBuffer(command_buffer, &.{
-        .flags = .{ .one_time_submit_bit = true },
-    });
-
-    const copy_region = vk.BufferCopy{
-        .src_offset = 0,
-        .dst_offset = 0,
-        .size = size,
-    };
-    self.device.cmdCopyBuffer(command_buffer, src.handle, dst.handle, &.{copy_region});
-
-    try self.device.endCommandBuffer(command_buffer);
-
-    const submit_info = vk.SubmitInfo{
-        .command_buffer_count = 1,
-        .p_command_buffers = &.{command_buffer},
-        .p_wait_dst_stage_mask = undefined,
-    };
-    // TODO: use transfer queue or pass queue as param
-    try self.device.queueSubmit(self.graphics_queue, &.{submit_info}, .null_handle);
-    try self.device.queueWaitIdle(self.graphics_queue);
 }
 
 /// To be called inside application loop to actually draw!
