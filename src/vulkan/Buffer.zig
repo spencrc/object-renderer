@@ -80,6 +80,6 @@ fn copyBuffer(gc: *const GraphicsContext, command_pool: vk.CommandPool, src: Buf
         .p_wait_dst_stage_mask = undefined,
     };
     // TODO: use transfer queue or pass queue as param
-    try gc.device.queueSubmit(gc.graphics_queue, &.{submit_info}, .null_handle);
-    try gc.device.queueWaitIdle(gc.graphics_queue);
+    try gc.device.queueSubmit(gc.graphics_queue.handle, &.{submit_info}, .null_handle);
+    try gc.device.queueWaitIdle(gc.graphics_queue.handle);
 }

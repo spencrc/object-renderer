@@ -42,8 +42,8 @@ fn initRecycle(gc: *const GraphicsContext, screen_width: usize, screen_height: u
     else
         caps.min_image_count;
 
-    const queue_family_index = [_]u32{ gc.graphics_family_index, gc.present_family_index };
-    const sharing_mode: vk.SharingMode = if (gc.graphics_family_index != gc.present_family_index)
+    const queue_family_index = [_]u32{ gc.graphics_queue.index, gc.present_queue.index };
+    const sharing_mode: vk.SharingMode = if (gc.graphics_queue.index != gc.present_queue.index)
         .concurrent
     else
         .exclusive;

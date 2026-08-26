@@ -23,11 +23,23 @@ const QueueFamilyIndices = struct {
     present_family_index: u32,
 };
 
+const Queue = struct {
+    handle: vk.Queue,
+    index: u32,
+
+    fn init(device: vk.DeviceProxy, family: u32) Queue {
+        return .{
+            .handle = device.getDeviceQueue(family, 0),
+            .index = family,
+        };
+    }
+};
+
 // TODO: make physical device initialization its own file/struct since it's independent anyways
 const DeviceCandidate = struct {
     pdevice: vk.PhysicalDevice,
     props: vk.PhysicalDeviceProperties,
-    queues: QueueFamilyIndices,
+    queue_indices: QueueFamilyIndices,
 };
 
 const RequiredFeatures = struct {
@@ -67,12 +79,10 @@ surface: vk.SurfaceKHR,
 
 // TODO: move away from default values for fields. will need to re-write a lot of the funcs.
 pdevice: vk.PhysicalDevice = .null_handle,
-graphics_family_index: u32 = std.math.maxInt(u32),
-present_family_index: u32 = std.math.maxInt(u32),
 mem_props: vk.PhysicalDeviceMemoryProperties = undefined,
 device: vk.DeviceProxy = undefined,
-graphics_queue: vk.Queue = .null_handle,
-present_queue: vk.Queue = .null_handle, // in theory, provides minor performance boost
+graphics_queue: Queue = undefined,
+present_queue: Queue = undefined, // in theory, provides minor performance boost
 
 swapchain: Swapchain = undefined,
 
@@ -124,7 +134,7 @@ pub fn init(
     errdefer self.deinitFrameResources();
 
     const command_pool = try self.device.createCommandPool(&.{
-        .queue_family_index = self.graphics_family_index, // TODO: use transfer family
+        .queue_family_index = self.graphics_queue.index, // TODO: use transfer family
     }, null);
     defer self.device.destroyCommandPool(command_pool, null);
 
@@ -188,8 +198,8 @@ fn initDevice(self: *GraphicsContext) !void {
     const candidate = try pickCandidateDevice(self.instance.proxy, self.surface, self.gpa);
     self.pdevice = candidate.pdevice;
     // TODO: get transfer family index
-    self.graphics_family_index = candidate.queues.graphics_family_index;
-    self.present_family_index = candidate.queues.present_family_index;
+    const graphics_family_index = candidate.queue_indices.graphics_family_index;
+    const present_family_index = candidate.queue_indices.present_family_index;
 
     const priority = [_]f32{1};
     var required_features = RequiredFeatures{};
@@ -197,15 +207,15 @@ fn initDevice(self: *GraphicsContext) !void {
     const required_device_extensions = comptime getRequiredDeviceExtensions();
     const device = try self.instance.proxy.createDevice(self.pdevice, &.{
         .p_next = &feats2,
-        .queue_create_info_count = if (candidate.queues.graphics_family_index == candidate.queues.present_family_index) 1 else 2,
+        .queue_create_info_count = if (graphics_family_index == present_family_index) 1 else 2,
         .p_queue_create_infos = &[_]vk.DeviceQueueCreateInfo{
             .{
-                .queue_family_index = candidate.queues.graphics_family_index,
+                .queue_family_index = graphics_family_index,
                 .queue_count = 1,
                 .p_queue_priorities = &priority,
             },
             .{
-                .queue_family_index = candidate.queues.present_family_index,
+                .queue_family_index = present_family_index,
                 .queue_count = 1,
                 .p_queue_priorities = &priority,
             },
@@ -215,16 +225,16 @@ fn initDevice(self: *GraphicsContext) !void {
         .enabled_layer_count = 0,
         .pp_enabled_layer_names = undefined,
     }, null);
-    errdefer self.device.destroyDevice(null);
 
     const vkd = try self.gpa.create(vk.DeviceWrapper);
     errdefer self.gpa.destroy(vkd);
     vkd.* = vk.DeviceWrapper.load(device, self.instance.proxy.wrapper.dispatch.vkGetDeviceProcAddr.?);
     self.device = vk.DeviceProxy.init(device, vkd);
+    errdefer self.device.destroyDevice(null);
     self.mem_props = self.instance.proxy.getPhysicalDeviceMemoryProperties(self.pdevice);
 
-    self.graphics_queue = self.device.getDeviceQueue(self.graphics_family_index, 0);
-    self.present_queue = self.device.getDeviceQueue(self.present_family_index, 0);
+    self.graphics_queue = .init(self.device, graphics_family_index);
+    self.present_queue = .init(self.device, present_family_index);
 }
 
 fn pickCandidateDevice(
@@ -261,7 +271,7 @@ fn getDeviceCandidate(
         return DeviceCandidate{
             .pdevice = pdevice,
             .props = props,
-            .queues = queue_families,
+            .queue_indices = queue_families,
         };
     }
 
@@ -538,7 +548,7 @@ fn initFrameResources(self: *GraphicsContext) !void {
         errdefer self.device.destroySemaphore(image_acquired_semaphore, null);
 
         const command_pool = try self.device.createCommandPool(&.{
-            .queue_family_index = self.graphics_family_index,
+            .queue_family_index = self.graphics_queue.index,
         }, null);
         errdefer self.device.destroyCommandPool(command_pool, null);
 
@@ -780,10 +790,10 @@ pub fn render(self: *GraphicsContext, screen_width: usize, screen_height: usize)
         .signal_semaphore_info_count = semaphore_signals.len,
         .p_signal_semaphore_infos = &semaphore_signals,
     };
-    try self.device.queueSubmit2(self.graphics_queue, &[_]vk.SubmitInfo2{submit_info}, .null_handle);
+    try self.device.queueSubmit2(self.graphics_queue.handle, &[_]vk.SubmitInfo2{submit_info}, .null_handle);
 
     // present the image
-    const present_result = self.device.queuePresentKHR(self.present_queue, &vk.PresentInfoKHR{
+    const present_result = self.device.queuePresentKHR(self.present_queue.handle, &vk.PresentInfoKHR{
         .wait_semaphore_count = 1,
         .p_wait_semaphores = &[_]vk.Semaphore{self.swapchain.render_complete_semaphores[image_index]},
         .swapchain_count = 1,
