@@ -8,12 +8,19 @@ const Swapchain = @import("swapchain.zig");
 const vert_spv align(@alignOf(u32)) = @embedFile("vertex_shader").*; // bytecode pointer is u32, hence the align
 const frag_spv align(@alignOf(u32)) = @embedFile("fragment_shader").*;
 const max_frames_in_flight = 2;
+const vertices = [_]Vertex{
+    .{ .pos = .{ 0, -0.5 }, .color = .{ 1, 0, 0 } },
+    .{ .pos = .{ 0.5, 0.5 }, .color = .{ 0, 1, 0 } },
+    .{ .pos = .{ -0.5, 0.5 }, .color = .{ 0, 0, 1 } },
+};
 
+// TODO: create Queue struct that stores both index and VkQueue object
 const QueueFamilyIndices = struct {
     graphics_family_index: u32,
     present_family_index: u32,
 };
 
+// TODO: make physical device initialization its own file/struct since it's independent anyways
 const DeviceCandidate = struct {
     pdevice: vk.PhysicalDevice,
     props: vk.PhysicalDeviceProperties,
@@ -49,12 +56,18 @@ const FrameResources = struct {
     image_acquired_semaphore: vk.Semaphore, // used to block rendering until able to present (go-ahead from GPU)
 };
 
+const Buffer = struct {
+    handle: vk.Buffer,
+    memory: vk.DeviceMemory,
+};
+
 const GraphicsContext = @This();
 
 gpa: std.mem.Allocator,
 instance: *const Instance,
 surface: vk.SurfaceKHR,
 
+// TODO: move away from default values for fields. will need to re-write a lot of the funcs.
 pdevice: vk.PhysicalDevice = .null_handle,
 graphics_family_index: u32 = std.math.maxInt(u32),
 present_family_index: u32 = std.math.maxInt(u32),
@@ -70,6 +83,8 @@ pipeline: vk.Pipeline = .null_handle,
 
 timeline_semaphore: vk.Semaphore = .null_handle,
 frame_resources: [max_frames_in_flight]FrameResources = undefined,
+
+vertex_buffer: Buffer = undefined,
 
 recreate_swapchain: bool = false,
 next_frame_index: u32 = 0,
@@ -109,11 +124,26 @@ pub fn init(
     try self.initFrameResources();
     errdefer self.deinitFrameResources();
 
+    const vertices_size = @sizeOf(@TypeOf(vertices));
+    self.vertex_buffer = try self.initBuffer(
+        vertices_size,
+        .{ .transfer_dst_bit = true, .vertex_buffer_bit = true },
+        .{ .device_local_bit = true },
+    );
+    errdefer self.deinitBuffer(self.vertex_buffer);
+    const command_pool = try self.device.createCommandPool(&.{
+        .queue_family_index = self.graphics_family_index, // TODO: use transfer family
+    }, null);
+    defer self.device.destroyCommandPool(command_pool, null);
+    try self.uploadVertices(command_pool, vertices_size);
+
     return self;
 }
 
 pub fn deinit(self: *GraphicsContext) void {
     self.device.deviceWaitIdle() catch @panic("failed to wait for device to idle!");
+
+    self.deinitBuffer(self.vertex_buffer);
 
     self.deinitFrameResources();
 
@@ -147,6 +177,7 @@ pub fn allocate(self: *const GraphicsContext, requirements: vk.MemoryRequirement
 fn initDevice(self: *GraphicsContext) !void {
     const candidate = try pickCandidateDevice(self.instance.proxy, self.surface, self.gpa);
     self.pdevice = candidate.pdevice;
+    // TODO: get transfer family index
     self.graphics_family_index = candidate.queues.graphics_family_index;
     self.present_family_index = candidate.queues.present_family_index;
 
@@ -356,10 +387,10 @@ fn initPipeline(self: *GraphicsContext) !void {
     };
 
     const vertex_input_info = vk.PipelineVertexInputStateCreateInfo{
-        // .p_vertex_binding_descriptions = &Vertex.binding_description,
-        // .vertex_binding_description_count = Vertex.binding_description.len,
-        // .p_vertex_attribute_descriptions = &Vertex.attribute_description,
-        // .vertex_attribute_description_count = Vertex.attribute_description.len,
+        .p_vertex_binding_descriptions = &Vertex.binding_description,
+        .vertex_binding_description_count = Vertex.binding_description.len,
+        .p_vertex_attribute_descriptions = &Vertex.attribute_description,
+        .vertex_attribute_description_count = Vertex.attribute_description.len,
     };
 
     const input_assembly_info = vk.PipelineInputAssemblyStateCreateInfo{
@@ -408,7 +439,7 @@ fn initPipeline(self: *GraphicsContext) !void {
         .polygon_mode = .fill,
         .line_width = 1.0,
         .cull_mode = .{ .back_bit = true },
-        .front_face = .counter_clockwise,
+        .front_face = .clockwise,
         .depth_bias_enable = .false,
         .depth_bias_constant_factor = 0,
         .depth_bias_clamp = 0,
@@ -523,6 +554,82 @@ fn deinitFrameResources(self: *GraphicsContext) void {
         self.device.destroyCommandPool(res.command_pool, null);
         self.device.destroySemaphore(res.image_acquired_semaphore, null);
     }
+}
+
+/// Helper method that returns a struct containing the VkBuffer and VkDeviceMemory objects for a buffer
+fn initBuffer(self: *GraphicsContext, size: vk.DeviceSize, usage: vk.BufferUsageFlags, properties: vk.MemoryPropertyFlags) !Buffer {
+    const buffer = try self.device.createBuffer(&.{
+        .size = size,
+        .usage = usage,
+        .sharing_mode = .exclusive,
+    }, null);
+    errdefer self.device.destroyBuffer(buffer, null);
+    const mem_reqs = self.device.getBufferMemoryRequirements(buffer);
+    const mem = try self.allocate(mem_reqs, properties);
+    errdefer self.device.freeMemory(mem, null);
+    try self.device.bindBufferMemory(buffer, mem, 0);
+    return .{
+        .handle = buffer,
+        .memory = mem,
+    };
+}
+
+fn deinitBuffer(self: *GraphicsContext, buffer: Buffer) void {
+    self.device.freeMemory(buffer.memory, null);
+    self.device.destroyBuffer(buffer.handle, null);
+}
+
+/// Takes vertices from file-scope and outputs a Buffer (VkBuffer + VkDeviceMemory) object
+// TODO: take vertices as param instead
+fn uploadVertices(self: *GraphicsContext, command_pool: vk.CommandPool, size: vk.DeviceSize) !void {
+    const staging_buffer = try self.initBuffer(
+        size,
+        .{ .transfer_src_bit = true },
+        .{ .host_visible_bit = true, .host_coherent_bit = true },
+    );
+    errdefer self.deinitBuffer(staging_buffer);
+
+    {
+        const data = try self.device.mapMemory(staging_buffer.memory, 0, vk.WHOLE_SIZE, .{});
+        defer self.device.unmapMemory(staging_buffer.memory);
+
+        const gpu_vertices: [*]Vertex = @ptrCast(@alignCast(data));
+        @memcpy(gpu_vertices, vertices[0..]);
+    }
+
+    try self.copyBuffer(command_pool, staging_buffer, self.vertex_buffer, size);
+}
+
+fn copyBuffer(self: *GraphicsContext, command_pool: vk.CommandPool, src: Buffer, dst: Buffer, size: vk.DeviceSize) !void {
+    var command_buffer: vk.CommandBuffer = undefined;
+    try self.device.allocateCommandBuffers(&.{
+        .command_pool = command_pool,
+        .level = .primary,
+        .command_buffer_count = 1,
+    }, @ptrCast(&command_buffer));
+    defer self.device.freeCommandBuffers(command_pool, &.{command_buffer});
+
+    try self.device.beginCommandBuffer(command_buffer, &.{
+        .flags = .{ .one_time_submit_bit = true },
+    });
+
+    const copy_region = vk.BufferCopy{
+        .src_offset = 0,
+        .dst_offset = 0,
+        .size = size,
+    };
+    self.device.cmdCopyBuffer(command_buffer, src.handle, dst.handle, &.{copy_region});
+
+    try self.device.endCommandBuffer(command_buffer);
+
+    const submit_info = vk.SubmitInfo{
+        .command_buffer_count = 1,
+        .p_command_buffers = &.{command_buffer},
+        .p_wait_dst_stage_mask = undefined,
+    };
+    // TODO: use transfer queue or pass queue as param
+    try self.device.queueSubmit(self.graphics_queue, &.{submit_info}, .null_handle);
+    try self.device.queueWaitIdle(self.graphics_queue);
 }
 
 /// To be called inside application loop to actually draw!
@@ -671,6 +778,7 @@ pub fn render(self: *GraphicsContext, screen_width: usize, screen_height: usize)
         self.device.cmdSetScissor(res.command_buffer, 0, &[_]vk.Rect2D{scissor});
 
         self.device.cmdBindPipeline(res.command_buffer, .graphics, self.pipeline);
+        self.device.cmdBindVertexBuffers(res.command_buffer, 0, &[_]vk.Buffer{self.vertex_buffer.handle}, &[_]u64{0});
         self.device.cmdDraw(res.command_buffer, 3, 1, 0, 0);
     }
     self.device.cmdEndRendering(res.command_buffer);

@@ -1,26 +1,19 @@
-struct VertexOutput
+struct VSInput {
+    float2 inPosition;
+    float3 inColor;
+};
+
+struct VSOutput
 {
-    float4 position : SV_Position;
-    float3 color    : SV_Target;
-};
-
-static const float3 positions[3] = {
-    float3( 0.0, -0.5, 0.0), // Top
-    float3(-0.5,  0.5, 0.0), // Bottom Left
-    float3( 0.5,  0.5, 0.0)  // Bottom Right
-};
-
-static const float3 colors[3] = {
-    float3(1.0, 0.0, 0.0), // Red
-    float3(0.0, 1.0, 0.0), // Green
-    float3(0.0, 0.0, 1.0)  // Blue
+    float4 pos : SV_Position;
+    float3 color;
 };
 
 [shader("vertex")]
-VertexOutput main(uint vertexIndex : SV_VertexID)
+VSOutput main(VSInput input)
 {
-    VertexOutput output;
-    output.position = float4(positions[vertexIndex], 1.0);
-    output.color = colors[vertexIndex];
+    VSOutput output;
+    output.pos = float4(input.inPosition, 0.0, 1.0);
+    output.color = input.inColor;
     return output;
 }
