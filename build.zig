@@ -27,23 +27,11 @@ pub fn build(b: *std.Build) void {
     });
     b.installArtifact(exe);
 
-    const vert_cmd = b.addSystemCommand(&.{
-        "glslc",
-        "--target-env=vulkan1.3",
-        "-o",
-    });
-    const vert_spv = vert_cmd.addOutputFileArg("vert.spv");
-    vert_cmd.addFileArg(b.path("shaders/main.vert"));
-    exe.root_module.addAnonymousImport("vertex_shader", .{ .root_source_file = vert_spv });
+    const slang_dep = b.dependency("slang-linux-x86_64", .{});
+    const slangc_path = slang_dep.path("bin/slangc");
 
-    const frag_cmd = b.addSystemCommand(&.{
-        "glslc",
-        "--target-env=vulkan1.3",
-        "-o",
-    });
-    const frag_spv = frag_cmd.addOutputFileArg("frag.spv");
-    frag_cmd.addFileArg(b.path("shaders/main.frag"));
-    exe.root_module.addAnonymousImport("fragment_shader", .{ .root_source_file = frag_spv });
+    exe.root_module.addAnonymousImport("vertex_shader", .{ .root_source_file = compileShader(b, slangc_path, "main.vert.slang") });
+    exe.root_module.addAnonymousImport("fragment_shader", .{ .root_source_file = compileShader(b, slangc_path, "main.frag.slang") });
 
     const run_step = b.step("run", "Run the app");
 
@@ -64,4 +52,16 @@ pub fn build(b: *std.Build) void {
 
     const test_step = b.step("test", "Run tests");
     test_step.dependOn(&run_exe_tests.step);
+}
+
+fn compileShader(b: *std.Build, slangc_path: std.Build.LazyPath, shader_name: []const u8) std.Build.LazyPath {
+    const shader_cmd = std.Build.Step.Run.create(b, "run slangc on shader");
+    shader_cmd.addFileArg(slangc_path);
+    shader_cmd.addFileArg(b.path(b.fmt("shaders/{s}", .{shader_name})));
+    shader_cmd.addArgs(&.{
+        "-target",
+        "spirv",
+        "-o",
+    });
+    return shader_cmd.addOutputFileArg(b.fmt("{s}.spv", .{shader_name}));
 }
