@@ -71,7 +71,7 @@ timeline_semaphore: vk.Semaphore = .null_handle,
 frame_resources: [max_frames_in_flight]FrameResources = undefined,
 
 recreate_swapchain: bool = false,
-frame_index: u32 = 0,
+next_frame_index: u32 = 0,
 next_signal_value: u64 = max_frames_in_flight + 1,
 
 pub fn init(
@@ -530,8 +530,8 @@ pub fn render(self: *GraphicsContext, screen_width: usize, screen_height: usize)
         self.recreate_swapchain = false;
     }
 
-    const frame_resource_index: u32 = self.frame_index % max_frames_in_flight;
-    self.frame_index += 1;
+    const frame_resource_index: u32 = self.next_frame_index;
+    self.next_frame_index = (self.next_frame_index + 1) % max_frames_in_flight;
 
     const signal_value: u64 = self.next_signal_value;
     self.next_signal_value += 1;
@@ -550,6 +550,9 @@ pub fn render(self: *GraphicsContext, screen_width: usize, screen_height: usize)
     const res = self.frame_resources[frame_resource_index];
     try self.device.resetCommandPool(res.command_pool, .{});
 
+    const swapchain_width = self.swapchain.extent.width;
+    const swapchain_height = self.swapchain.extent.height;
+
     const acquire_result = self.device.acquireNextImageKHR(self.swapchain.handle, std.math.maxInt(u64), res.image_acquired_semaphore, .null_handle) catch |err| switch (err) {
         error.OutOfDateKHR => {
             self.recreate_swapchain = true;
@@ -557,15 +560,13 @@ pub fn render(self: *GraphicsContext, screen_width: usize, screen_height: usize)
         },
         else => return err,
     };
-    switch (acquire_result.result) {
-        .suboptimal_khr => self.recreate_swapchain = true,
-        .success => {},
-        else => unreachable,
-    }
-    const image_index = acquire_result.image_index;
+    self.recreate_swapchain = switch (acquire_result.result) {
+        .suboptimal_khr => true,
+        .success => swapchain_width != screen_width or swapchain_height != screen_height,
+        else => return error.CannotAcquireSwapchainImage,
+    };
 
-    const swapchain_width = self.swapchain.extent.width;
-    const swapchain_height = self.swapchain.extent.height;
+    const image_index = acquire_result.image_index;
 
     // begin recording commands
     try self.device.beginCommandBuffer(res.command_buffer, &.{
@@ -737,11 +738,22 @@ pub fn render(self: *GraphicsContext, screen_width: usize, screen_height: usize)
     try self.device.queueSubmit2(self.graphics_queue, &[_]vk.SubmitInfo2{submit_info}, .null_handle);
 
     // present the image
-    _ = try self.device.queuePresentKHR(self.graphics_queue, &vk.PresentInfoKHR{
+    const present_result = self.device.queuePresentKHR(self.graphics_queue, &vk.PresentInfoKHR{
         .wait_semaphore_count = 1,
         .p_wait_semaphores = &[_]vk.Semaphore{self.swapchain.render_complete_semaphores[image_index]},
         .swapchain_count = 1,
         .p_swapchains = &[_]vk.SwapchainKHR{self.swapchain.handle},
         .p_image_indices = &[_]u32{image_index},
-    });
+    }) catch |err| switch (err) {
+        error.OutOfDateKHR => {
+            self.recreate_swapchain = true;
+            return;
+        },
+        else => return err,
+    };
+    self.recreate_swapchain = switch (present_result) {
+        .suboptimal_khr => true,
+        .success => self.recreate_swapchain,
+        else => unreachable,
+    };
 }
