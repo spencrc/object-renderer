@@ -61,6 +61,7 @@ present_family_index: u32 = std.math.maxInt(u32),
 mem_props: vk.PhysicalDeviceMemoryProperties = undefined,
 device: vk.DeviceProxy = undefined,
 graphics_queue: vk.Queue = .null_handle,
+present_queue: vk.Queue = .null_handle, // in theory, provides minor performance boost
 
 swapchain: Swapchain = undefined,
 
@@ -182,6 +183,7 @@ fn initDevice(self: *GraphicsContext) !void {
     self.mem_props = self.instance.proxy.getPhysicalDeviceMemoryProperties(self.pdevice);
 
     self.graphics_queue = self.device.getDeviceQueue(self.graphics_family_index, 0);
+    self.present_queue = self.device.getDeviceQueue(self.present_family_index, 0);
 }
 
 fn pickCandidateDevice(
@@ -738,7 +740,7 @@ pub fn render(self: *GraphicsContext, screen_width: usize, screen_height: usize)
     try self.device.queueSubmit2(self.graphics_queue, &[_]vk.SubmitInfo2{submit_info}, .null_handle);
 
     // present the image
-    const present_result = self.device.queuePresentKHR(self.graphics_queue, &vk.PresentInfoKHR{
+    const present_result = self.device.queuePresentKHR(self.present_queue, &vk.PresentInfoKHR{
         .wait_semaphore_count = 1,
         .p_wait_semaphores = &[_]vk.Semaphore{self.swapchain.render_complete_semaphores[image_index]},
         .swapchain_count = 1,
