@@ -9,10 +9,12 @@ const vert_spv align(@alignOf(u32)) = @embedFile("vertex_shader").*; // bytecode
 const frag_spv align(@alignOf(u32)) = @embedFile("fragment_shader").*;
 const max_frames_in_flight = 2;
 const vertices = [_]Vertex{
-    .{ .pos = .{ 0, -0.5 }, .color = .{ 1, 0, 0 } },
-    .{ .pos = .{ 0.5, 0.5 }, .color = .{ 0, 1, 0 } },
-    .{ .pos = .{ -0.5, 0.5 }, .color = .{ 0, 0, 1 } },
+    .{ .pos = .{ -0.5, -0.5 }, .color = .{ 1, 0, 0 } },
+    .{ .pos = .{ 0.5, -0.5 }, .color = .{ 0, 1, 0 } },
+    .{ .pos = .{ 0.5, 0.5 }, .color = .{ 0, 0, 1 } },
+    .{ .pos = .{ -0.5, 0.5 }, .color = .{ 1, 1, 1 } },
 };
+const indices = [_]u16{ 0, 1, 2, 2, 3, 0 };
 
 // TODO: create Queue struct that stores both index and VkQueue object
 const QueueFamilyIndices = struct {
@@ -85,6 +87,7 @@ timeline_semaphore: vk.Semaphore = .null_handle,
 frame_resources: [max_frames_in_flight]FrameResources = undefined,
 
 vertex_buffer: Buffer = undefined,
+index_buffer: Buffer = undefined,
 
 recreate_swapchain: bool = false,
 next_frame_index: u32 = 0,
@@ -124,18 +127,26 @@ pub fn init(
     try self.initFrameResources();
     errdefer self.deinitFrameResources();
 
-    const vertices_size = @sizeOf(@TypeOf(vertices));
-    self.vertex_buffer = try self.initBuffer(
-        vertices_size,
-        .{ .transfer_dst_bit = true, .vertex_buffer_bit = true },
-        .{ .device_local_bit = true },
-    );
-    errdefer self.deinitBuffer(self.vertex_buffer);
     const command_pool = try self.device.createCommandPool(&.{
         .queue_family_index = self.graphics_family_index, // TODO: use transfer family
     }, null);
     defer self.device.destroyCommandPool(command_pool, null);
-    try self.uploadVertices(command_pool, vertices_size);
+
+    self.vertex_buffer = try self.initBuffer(
+        @sizeOf(@TypeOf(vertices)),
+        .{ .transfer_dst_bit = true, .vertex_buffer_bit = true },
+        .{ .device_local_bit = true },
+    );
+    errdefer self.deinitBuffer(self.vertex_buffer);
+    try self.uploadTo(command_pool, self.vertex_buffer, Vertex, &vertices);
+
+    self.index_buffer = try self.initBuffer(
+        @sizeOf(@TypeOf(indices)),
+        .{ .transfer_dst_bit = true, .index_buffer_bit = true },
+        .{ .device_local_bit = true },
+    );
+    errdefer self.deinitBuffer(self.index_buffer);
+    try self.uploadTo(command_pool, self.index_buffer, u16, &indices);
 
     return self;
 }
@@ -144,6 +155,7 @@ pub fn deinit(self: *GraphicsContext) void {
     self.device.deviceWaitIdle() catch @panic("failed to wait for device to idle!");
 
     self.deinitBuffer(self.vertex_buffer);
+    self.deinitBuffer(self.index_buffer);
 
     self.deinitFrameResources();
 
@@ -579,9 +591,9 @@ fn deinitBuffer(self: *GraphicsContext, buffer: Buffer) void {
     self.device.destroyBuffer(buffer.handle, null);
 }
 
-/// Takes vertices from file-scope and outputs a Buffer (VkBuffer + VkDeviceMemory) object
-// TODO: take vertices as param instead
-fn uploadVertices(self: *GraphicsContext, command_pool: vk.CommandPool, size: vk.DeviceSize) !void {
+/// Takes objects of type T and copys them into the provided buffer
+fn uploadTo(self: *GraphicsContext, command_pool: vk.CommandPool, dst: Buffer, comptime T: type, objects: []const T) !void {
+    const size = @sizeOf(T) * objects.len;
     const staging_buffer = try self.initBuffer(
         size,
         .{ .transfer_src_bit = true },
@@ -593,11 +605,11 @@ fn uploadVertices(self: *GraphicsContext, command_pool: vk.CommandPool, size: vk
         const data = try self.device.mapMemory(staging_buffer.memory, 0, vk.WHOLE_SIZE, .{});
         defer self.device.unmapMemory(staging_buffer.memory);
 
-        const gpu_vertices: [*]Vertex = @ptrCast(@alignCast(data));
-        @memcpy(gpu_vertices, vertices[0..]);
+        const gpu_objects: [*]T = @ptrCast(@alignCast(data));
+        @memcpy(gpu_objects, objects[0..]);
     }
 
-    try self.copyBuffer(command_pool, staging_buffer, self.vertex_buffer, size);
+    try self.copyBuffer(command_pool, staging_buffer, dst, size);
 }
 
 fn copyBuffer(self: *GraphicsContext, command_pool: vk.CommandPool, src: Buffer, dst: Buffer, size: vk.DeviceSize) !void {
@@ -779,7 +791,8 @@ pub fn render(self: *GraphicsContext, screen_width: usize, screen_height: usize)
 
         self.device.cmdBindPipeline(res.command_buffer, .graphics, self.pipeline);
         self.device.cmdBindVertexBuffers(res.command_buffer, 0, &[_]vk.Buffer{self.vertex_buffer.handle}, &[_]u64{0});
-        self.device.cmdDraw(res.command_buffer, 3, 1, 0, 0);
+        self.device.cmdBindIndexBuffer(res.command_buffer, self.index_buffer.handle, 0, .uint16);
+        self.device.cmdDrawIndexed(res.command_buffer, indices.len, 1, 0, 0, 0);
     }
     self.device.cmdEndRendering(res.command_buffer);
 
