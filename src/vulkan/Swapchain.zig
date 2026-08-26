@@ -1,6 +1,6 @@
 const vk = @import("vulkan");
 const std = @import("std");
-const GraphicsContext = @import("graphics_context.zig");
+const GraphicsContext = @import("GraphicsContext.zig");
 
 pub const depth_format = vk.Format.d32_sfloat;
 

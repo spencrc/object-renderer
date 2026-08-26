@@ -1,9 +1,9 @@
 const vk = @import("vulkan");
 const std = @import("std");
 const builtin = @import("builtin");
-const Instance = @import("instance.zig");
+const Instance = @import("Instance.zig");
 const Vertex = @import("vertex.zig");
-const Swapchain = @import("swapchain.zig");
+const Swapchain = @import("Swapchain.zig");
 const Buffer = @import("Buffer.zig");
 
 const vert_spv align(@alignOf(u32)) = @embedFile("vertex_shader").*; // bytecode pointer is u32, hence the align

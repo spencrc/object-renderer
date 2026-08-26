@@ -1,8 +1,8 @@
 const std = @import("std");
 const sdl3 = @import("sdl3");
 const vk = @import("vulkan");
-const Instance = @import("vulkan/instance.zig");
-const GraphicsContext = @import("vulkan/graphics_context.zig");
+const Instance = @import("vulkan/Instance.zig");
+const GraphicsContext = @import("vulkan/GraphicsContext.zig");
 
 const FPS = 60;
 const SCREEN_WIDTH = 640;

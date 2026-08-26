@@ -1,6 +1,6 @@
 const std = @import("std");
 const vk = @import("vulkan");
-const GraphicsContext = @import("graphics_context.zig");
+const GraphicsContext = @import("GraphicsContext.zig");
 
 const Buffer = @This();
 
