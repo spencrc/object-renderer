@@ -111,6 +111,7 @@ pub fn init(
         .instance = instance,
         .surface = surface,
     };
+    errdefer self.instance.proxy.destroySurfaceKHR(self.surface, null);
 
     try self.initDevice();
     errdefer self.deinitDevice();
@@ -174,6 +175,8 @@ pub fn deinit(self: *GraphicsContext) void {
     self.swapchain.deinit(self);
 
     self.deinitDevice();
+
+    self.instance.proxy.destroySurfaceKHR(self.surface, null);
 }
 
 pub fn findMemoryTypeIndex(self: *const GraphicsContext, memory_types: u32, flags: vk.MemoryPropertyFlags) !u32 {
@@ -365,7 +368,6 @@ fn findQueueFamilies(
 fn deinitDevice(self: *GraphicsContext) void {
     // device
     self.device.destroyDevice(null);
-    self.instance.proxy.destroySurfaceKHR(self.surface, null);
     // need to destroy wrappers as well to prevent mem leaks
     self.gpa.destroy(self.device.wrapper);
 }
