@@ -1,12 +1,15 @@
 const vk = @import("vulkan");
 const std = @import("std");
-const GraphicsContext = @import("GraphicsContext.zig");
+const Instance = @import("Instance.zig");
+const Device = @import("Device.zig");
+const GpuAllocator = @import("GpuAllocator.zig");
 
 pub const depth_format = vk.Format.d32_sfloat;
 
 const Swapchain = @This();
 
 gpa: std.mem.Allocator,
+gpu_alloc: GpuAllocator,
 
 handle: vk.SwapchainKHR,
 surface_format: vk.SurfaceFormatKHR,
@@ -19,37 +22,38 @@ depth_image_mem: vk.DeviceMemory,
 depth_image_view: vk.ImageView,
 
 /// Initializes swapchain with correct surface format, extent, and present mode for GraphicsContext
-pub fn init(gc: *const GraphicsContext, screen_width: usize, screen_height: usize, gpa: std.mem.Allocator) !Swapchain {
-    return initRecycle(gc, screen_width, screen_height, gpa, .null_handle);
+pub fn init(device: *const Device, instance: *const Instance, surface: vk.SurfaceKHR, screen_width: usize, screen_height: usize, gpa: std.mem.Allocator, gpu_alloc: GpuAllocator) !Swapchain {
+    return initRecycle(device, instance, surface, screen_width, screen_height, gpa, gpu_alloc, .null_handle);
 }
 
-fn initRecycle(gc: *const GraphicsContext, screen_width: usize, screen_height: usize, gpa: std.mem.Allocator, old_handle: vk.SwapchainKHR) !Swapchain {
+// TODO: use some kind of create info / opts struct to pass in all these vars
+fn initRecycle(device: *const Device, instance: *const Instance, surface: vk.SurfaceKHR, screen_width: usize, screen_height: usize, gpa: std.mem.Allocator, gpu_alloc: GpuAllocator, old_handle: vk.SwapchainKHR) !Swapchain {
     defer if (old_handle != .null_handle) {
-        gc.device.destroySwapchainKHR(old_handle, null);
+        device.proxy.destroySwapchainKHR(old_handle, null);
     };
 
-    const caps = try gc.instance.proxy.getPhysicalDeviceSurfaceCapabilitiesKHR(gc.pdevice, gc.surface);
+    const caps = try instance.proxy.getPhysicalDeviceSurfaceCapabilitiesKHR(device.pdevice, surface);
     const actual_extent = findSwapExtent(caps, screen_width, screen_height);
     if (actual_extent.width == 0 or actual_extent.height == 0) {
         return error.InvalidSurfaceDimensions;
     }
 
-    const surface_format = try findSurfaceFormat(gc.instance.proxy, gc.pdevice, gc.surface, gpa);
-    const present_mode = try findPresentMode(gc.instance.proxy, gc.pdevice, gc.surface, gpa);
+    const surface_format = try findSurfaceFormat(instance.proxy, device.pdevice, surface, gpa);
+    const present_mode = try findPresentMode(instance.proxy, device.pdevice, surface, gpa);
 
     const image_count = if (caps.max_image_count > 0)
         @min(caps.min_image_count, caps.max_image_count)
     else
         caps.min_image_count;
 
-    const queue_family_index = [_]u32{ gc.graphics_queue.index, gc.present_queue.index };
-    const sharing_mode: vk.SharingMode = if (gc.graphics_queue.index != gc.present_queue.index)
+    const queue_family_index = [_]u32{ device.graphics_queue.index, device.present_queue.index };
+    const sharing_mode: vk.SharingMode = if (device.graphics_queue.index != device.present_queue.index)
         .concurrent
     else
         .exclusive;
 
-    const swapchain = try gc.device.createSwapchainKHR(&.{
-        .surface = gc.surface,
+    const swapchain = try device.proxy.createSwapchainKHR(&.{
+        .surface = surface,
         .min_image_count = image_count,
         .image_format = surface_format.format,
         .image_color_space = surface_format.color_space,
@@ -65,9 +69,9 @@ fn initRecycle(gc: *const GraphicsContext, screen_width: usize, screen_height: u
         .clipped = .true,
         .old_swapchain = old_handle,
     }, null);
-    errdefer gc.device.destroySwapchainKHR(swapchain, null);
+    errdefer device.proxy.destroySwapchainKHR(swapchain, null);
 
-    const images = try gc.device.getSwapchainImagesAllocKHR(swapchain, gpa);
+    const images = try device.proxy.getSwapchainImagesAllocKHR(swapchain, gpa);
     defer gpa.free(images);
 
     const swap_images = try gpa.alloc(vk.Image, images.len);
@@ -80,13 +84,13 @@ fn initRecycle(gc: *const GraphicsContext, screen_width: usize, screen_height: u
     errdefer gpa.free(render_complete_semaphores);
 
     var i: usize = 0;
-    errdefer for (swap_image_views[0..i]) |siv| gc.device.destroyImageView(siv, null);
-    errdefer for (render_complete_semaphores[0..i]) |rcs| gc.device.destroySemaphore(rcs, null);
+    errdefer for (swap_image_views[0..i]) |siv| device.proxy.destroyImageView(siv, null);
+    errdefer for (render_complete_semaphores[0..i]) |rcs| device.proxy.destroySemaphore(rcs, null);
 
     for (images) |image| {
         swap_images[i] = image;
 
-        swap_image_views[i] = try gc.device.createImageView(&.{
+        swap_image_views[i] = try device.proxy.createImageView(&.{
             .image = image,
             .view_type = .@"2d",
             .format = surface_format.format,
@@ -100,12 +104,12 @@ fn initRecycle(gc: *const GraphicsContext, screen_width: usize, screen_height: u
             },
         }, null);
 
-        render_complete_semaphores[i] = try gc.device.createSemaphore(&.{}, null);
+        render_complete_semaphores[i] = try device.proxy.createSemaphore(&.{}, null);
 
         i += 1;
     }
 
-    const depth_image = try gc.device.createImage(&.{
+    const depth_image = try device.proxy.createImage(&.{
         .image_type = .@"2d",
         .format = depth_format,
         .extent = .{ .width = actual_extent.width, .height = actual_extent.height, .depth = 1 },
@@ -117,13 +121,13 @@ fn initRecycle(gc: *const GraphicsContext, screen_width: usize, screen_height: u
         .initial_layout = .undefined,
         .sharing_mode = .exclusive,
     }, null);
-    errdefer gc.device.destroyImage(depth_image, null);
-    const image_mem_reqs = gc.device.getImageMemoryRequirements(depth_image);
-    const image_mem = try gc.allocate(image_mem_reqs, .{ .device_local_bit = true });
-    errdefer gc.device.freeMemory(image_mem, null);
-    try gc.device.bindImageMemory(depth_image, image_mem, 0);
+    errdefer device.proxy.destroyImage(depth_image, null);
+    const image_mem_reqs = device.proxy.getImageMemoryRequirements(depth_image);
+    const image_mem = try gpu_alloc.allocate(image_mem_reqs, .{ .device_local_bit = true });
+    errdefer device.proxy.freeMemory(image_mem, null);
+    try device.proxy.bindImageMemory(depth_image, image_mem, 0);
 
-    const depth_image_view = try gc.device.createImageView(&.{
+    const depth_image_view = try device.proxy.createImageView(&.{
         .image = depth_image,
         .view_type = .@"2d",
         .format = depth_format,
@@ -136,10 +140,11 @@ fn initRecycle(gc: *const GraphicsContext, screen_width: usize, screen_height: u
             .layer_count = 1,
         },
     }, null);
-    errdefer gc.device.destroyImageView(depth_image_view, null);
+    errdefer device.proxy.destroyImageView(depth_image_view, null);
 
     return Swapchain{
         .gpa = gpa,
+        .gpu_alloc = gpu_alloc,
         .surface_format = surface_format,
         .extent = actual_extent,
         .handle = swapchain,
@@ -152,45 +157,46 @@ fn initRecycle(gc: *const GraphicsContext, screen_width: usize, screen_height: u
     };
 }
 
-pub fn recreate(self: *Swapchain, gc: *const GraphicsContext, screen_width: usize, screen_height: usize) !void {
+pub fn recreate(self: *Swapchain, device: *const Device, instance: *const Instance, surface: vk.SurfaceKHR, screen_width: usize, screen_height: usize) !void {
     const gpa = self.gpa;
+    const gpu_alloc = self.gpu_alloc;
     const old_handle = self.handle;
 
-    try gc.device.deviceWaitIdle();
+    try device.proxy.deviceWaitIdle();
 
-    self.deinitExceptSwapchain(gc);
+    self.deinitExceptSwapchain(device);
 
     // set current handle to NULL_HANDLE to signal that the current swapchain does no longer need to be
     // de-initialized if we fail to recreate it.
     self.handle = .null_handle;
-    self.* = try initRecycle(gc, screen_width, screen_height, gpa, old_handle);
+    self.* = try initRecycle(device, instance, surface, screen_width, screen_height, gpa, gpu_alloc, old_handle);
 }
 
-fn deinitExceptSwapchain(self: *Swapchain, gc: *const GraphicsContext) void {
-    gc.device.destroyImageView(self.depth_image_view, null);
-    gc.device.freeMemory(self.depth_image_mem, null);
-    gc.device.destroyImage(self.depth_image, null);
-    for (self.render_complete_semaphores) |s| gc.device.destroySemaphore(s, null);
+fn deinitExceptSwapchain(self: *Swapchain, device: *const Device) void {
+    device.proxy.destroyImageView(self.depth_image_view, null);
+    device.proxy.freeMemory(self.depth_image_mem, null);
+    device.proxy.destroyImage(self.depth_image, null);
+    for (self.render_complete_semaphores) |s| device.proxy.destroySemaphore(s, null);
     self.gpa.free(self.render_complete_semaphores);
-    for (self.swap_image_views) |siv| gc.device.destroyImageView(siv, null);
+    for (self.swap_image_views) |siv| device.proxy.destroyImageView(siv, null);
     self.gpa.free(self.swap_image_views);
     // swap_images owned by swapchain itself, and will be cleaned when swapchain destroyed
     self.gpa.free(self.swap_images);
 }
 
-pub fn deinit(self: *Swapchain, gc: *const GraphicsContext) void {
-    self.deinitExceptSwapchain(gc);
-    gc.device.destroySwapchainKHR(self.handle, null);
+pub fn deinit(self: *Swapchain, device: *const Device) void {
+    self.deinitExceptSwapchain(device);
+    device.proxy.destroySwapchainKHR(self.handle, null);
 }
 
 fn findSurfaceFormat(
     instance: vk.InstanceProxy,
     pdevice: vk.PhysicalDevice,
     surface: vk.SurfaceKHR,
-    allocator: std.mem.Allocator,
+    gpa: std.mem.Allocator,
 ) !vk.SurfaceFormatKHR {
-    const surface_formats = try instance.getPhysicalDeviceSurfaceFormatsAllocKHR(pdevice, surface, allocator);
-    defer allocator.free(surface_formats);
+    const surface_formats = try instance.getPhysicalDeviceSurfaceFormatsAllocKHR(pdevice, surface, gpa);
+    defer gpa.free(surface_formats);
 
     const preferred = vk.SurfaceFormatKHR{
         .format = .b8g8r8a8_srgb,
@@ -210,10 +216,10 @@ fn findPresentMode(
     instance: vk.InstanceProxy,
     pdevice: vk.PhysicalDevice,
     surface: vk.SurfaceKHR,
-    allocator: std.mem.Allocator,
+    gpa: std.mem.Allocator,
 ) !vk.PresentModeKHR {
-    const present_modes = try instance.getPhysicalDeviceSurfacePresentModesAllocKHR(pdevice, surface, allocator);
-    defer allocator.free(present_modes);
+    const present_modes = try instance.getPhysicalDeviceSurfacePresentModesAllocKHR(pdevice, surface, gpa);
+    defer gpa.free(present_modes);
 
     const preferred = [_]vk.PresentModeKHR{
         .mailbox_khr,
