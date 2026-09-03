@@ -5,7 +5,6 @@ struct Vertex {
 
 struct PushConstants {
     Vertex* vertexBuffer;
-    uint16_t* indexBuffer;
     float4x4 model;
     float4x4 view;
     float4x4 proj;
@@ -20,11 +19,9 @@ struct VSOutput
 };
 
 [shader("vertex")]
-VSOutput main(uint drawID : SV_VertexID)
+VSOutput main(uint16_t vertexID : SV_VertexID)
 {
-    uint16_t index = pcs.indexBuffer[drawID];
-
-    Vertex v = pcs.vertexBuffer[index];
+    Vertex v = pcs.vertexBuffer[vertexID];
 
     VSOutput output;
     output.pos = mul(pcs.proj, mul(pcs.view, mul(pcs.model, float4(v.position, 0.0, 1.0))));

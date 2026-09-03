@@ -10,7 +10,7 @@ const frag_spv align(@alignOf(u32)) = @embedFile("fragment_shader").*;
 
 pub const PushConstants = struct {
     vertex_buffer_address: vk.DeviceAddress,
-    index_buffer_address: vk.DeviceAddress,
+    _padding: u64 = 0,
     model: math.Mat4,
     view: math.Mat4,
     proj: math.Mat4,

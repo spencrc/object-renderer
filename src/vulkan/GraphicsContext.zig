@@ -104,9 +104,9 @@ pub fn init(
     const index_buffer: Buffer = try .init(
         &device,
         @sizeOf(@TypeOf(indices)),
-        .{ .transfer_dst_bit = true, .index_buffer_bit = true, .shader_device_address_bit = true },
+        .{ .transfer_dst_bit = true, .index_buffer_bit = true },
         .{ .device_local_bit = true },
-        .{ .device_address_bit = true },
+        .{},
         gpu_alloc,
     );
     errdefer index_buffer.deinit(&device);
@@ -334,7 +334,6 @@ pub fn render(self: *GraphicsContext, screen_width: usize, screen_height: usize)
         proj.m[1][1] *= -1;
         const push_data = GraphicsPipeline.PushConstants{
             .vertex_buffer_address = self.vertex_buffer.device_address,
-            .index_buffer_address = self.index_buffer.device_address,
             .model = .rotate(90, math.Vec3{ .x = 0, .y = 0, .z = 1 }),
             .view = .lookat(math.Vec3{ .x = 2, .y = 2, .z = 2 }, math.Vec3{ .x = 0, .y = 0, .z = 0 }, math.Vec3{ .x = 0, .y = 0, .z = 1 }),
             .proj = proj,
@@ -349,8 +348,8 @@ pub fn render(self: *GraphicsContext, screen_width: usize, screen_height: usize)
         );
 
         device.cmdBindPipeline(res.command_buffer, .graphics, self.pipeline.handle);
-        // using cmdDrawIndexed will lead to unreadable data for shaders due to device address usage
-        device.cmdDraw(res.command_buffer, indices.len, 1, 0, 0);
+        device.cmdBindIndexBuffer(res.command_buffer, self.index_buffer.handle, 0, .uint16);
+        device.cmdDrawIndexed(res.command_buffer, indices.len, 1, 0, 0, 0);
     }
     device.cmdEndRendering(res.command_buffer);
 
