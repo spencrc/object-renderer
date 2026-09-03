@@ -46,7 +46,7 @@ pub fn uploadTo(dst: Buffer, device: *const Device, command_pool: vk.CommandPool
         .{},
         gpu_alloc,
     );
-    errdefer staging_buffer.deinit(device);
+    defer staging_buffer.deinit(device);
 
     {
         const data = try device.proxy.mapMemory(staging_buffer.memory, 0, vk.WHOLE_SIZE, .{});
