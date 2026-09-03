@@ -95,7 +95,7 @@ const empty_names = [_][*:0]const u8{};
 const debug_required_layers = [_][*:0]const u8{"VK_LAYER_KHRONOS_validation"}; // will be DCE'd if not in Debug or ReleaseSafe
 fn getRequiredLayers() []const [*:0]const u8 {
     return switch (builtin.mode) {
-        .Debug, .ReleaseSafe => &empty_names,
+        .Debug, .ReleaseSafe => &debug_required_layers,
         else => &empty_names,
     };
 }
