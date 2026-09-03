@@ -31,7 +31,7 @@ const UniformBufferObject = struct {
     proj: math.Mat4,
 };
 
-const GraphicsContext = @This();
+const Renderer = @This();
 
 gpa: std.mem.Allocator,
 instance: *const Instance,
@@ -59,13 +59,14 @@ pub fn init(
     screen_width: usize,
     screen_height: usize,
     gpa: std.mem.Allocator,
-) !GraphicsContext {
+) !Renderer {
     errdefer instance.proxy.destroySurfaceKHR(surface, null);
 
     const device: Device = try .init(instance, surface, gpa);
     errdefer device.deinit(gpa);
 
-    const gpu_alloc: GpuAllocator = .init(&device);
+    const mem_props = instance.proxy.getPhysicalDeviceMemoryProperties(device.pdevice);
+    const gpu_alloc: GpuAllocator = .init(device.proxy, mem_props);
 
     var swapchain: Swapchain = try .init(&device, instance, surface, screen_width, screen_height, gpa, gpu_alloc);
     errdefer swapchain.deinit(&device);
@@ -126,7 +127,7 @@ pub fn init(
     };
 }
 
-pub fn deinit(self: *GraphicsContext) void {
+pub fn deinit(self: *Renderer) void {
     self.device.proxy.deviceWaitIdle() catch @panic("failed to wait for device to idle!");
 
     self.vertex_buffer.deinit(&self.device);
@@ -145,7 +146,7 @@ pub fn deinit(self: *GraphicsContext) void {
     self.instance.proxy.destroySurfaceKHR(self.surface, null);
 }
 
-/// Initializes array of frame resources for GraphicsContext
+/// Initializes array of frame resources for Renderer
 fn initFrameResources(device: *const Device) ![max_frames_in_flight]FrameResources {
     var frame_resources: [max_frames_in_flight]FrameResources = undefined;
     for (&frame_resources) |*res| {
@@ -182,7 +183,7 @@ fn deinitFrameResources(device: *const Device, frame_resources: [max_frames_in_f
 }
 
 /// To be called inside application loop to actually draw!
-pub fn render(self: *GraphicsContext, screen_width: usize, screen_height: usize) !void {
+pub fn render(self: *Renderer, screen_width: usize, screen_height: usize) !void {
     const device = self.device.proxy;
 
     if (self.recreate_swapchain) {

@@ -30,9 +30,9 @@ pub fn init(device: *const Device, size: vk.DeviceSize, usage: vk.BufferUsageFla
     };
 }
 
-pub fn deinit(self: Buffer, device: *const Device) void {
-    device.proxy.freeMemory(self.memory, null);
+pub fn deinit(self: *const Buffer, device: *const Device) void {
     device.proxy.destroyBuffer(self.handle, null);
+    device.proxy.freeMemory(self.memory, null);
 }
 
 /// Takes objects of type T and copys them into the provided buffer

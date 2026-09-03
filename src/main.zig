@@ -2,7 +2,7 @@ const std = @import("std");
 const sdl3 = @import("sdl3");
 const vk = @import("vulkan");
 const Instance = @import("vulkan/Instance.zig");
-const GraphicsContext = @import("vulkan/GraphicsContext.zig");
+const Renderer = @import("vulkan/Renderer.zig");
 
 const FPS = 60;
 const SCREEN_WIDTH = 640;
@@ -30,7 +30,7 @@ pub fn main(init: std.process.Init) !void {
     defer instance.deinit();
 
     const sdl_surface: sdl3.vulkan.Surface = try .init(window, @ptrFromInt(@intFromEnum(instance.proxy.handle)), null);
-    var ctx: GraphicsContext = try .init(&instance, @enumFromInt(@intFromPtr(sdl_surface.surface)), SCREEN_WIDTH, SCREEN_HEIGHT, init.gpa);
+    var ctx: Renderer = try .init(&instance, @enumFromInt(@intFromPtr(sdl_surface.surface)), SCREEN_WIDTH, SCREEN_HEIGHT, init.gpa);
     defer ctx.deinit();
 
     var quit = false;

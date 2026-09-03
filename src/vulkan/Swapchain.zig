@@ -21,17 +21,13 @@ depth_image: vk.Image,
 depth_image_mem: vk.DeviceMemory,
 depth_image_view: vk.ImageView,
 
-/// Initializes swapchain with correct surface format, extent, and present mode for GraphicsContext
+/// Initializes swapchain with correct surface format, extent, and present mode for Renderer
 pub fn init(device: *const Device, instance: *const Instance, surface: vk.SurfaceKHR, screen_width: usize, screen_height: usize, gpa: std.mem.Allocator, gpu_alloc: GpuAllocator) !Swapchain {
     return initRecycle(device, instance, surface, screen_width, screen_height, gpa, gpu_alloc, .null_handle);
 }
 
 // TODO: use some kind of create info / opts struct to pass in all these vars
 fn initRecycle(device: *const Device, instance: *const Instance, surface: vk.SurfaceKHR, screen_width: usize, screen_height: usize, gpa: std.mem.Allocator, gpu_alloc: GpuAllocator, old_handle: vk.SwapchainKHR) !Swapchain {
-    defer if (old_handle != .null_handle) {
-        device.proxy.destroySwapchainKHR(old_handle, null);
-    };
-
     const caps = try instance.proxy.getPhysicalDeviceSurfaceCapabilitiesKHR(device.pdevice, surface);
     const actual_extent = findSwapExtent(caps, screen_width, screen_height);
     if (actual_extent.width == 0 or actual_extent.height == 0) {
@@ -164,12 +160,18 @@ pub fn recreate(self: *Swapchain, device: *const Device, instance: *const Instan
 
     try device.proxy.deviceWaitIdle();
 
+    const new: Swapchain = try initRecycle(device, instance, surface, screen_width, screen_height, gpa, gpu_alloc, old_handle);
+
     self.deinitExceptSwapchain(device);
+
+    if (old_handle != .null_handle) {
+        device.proxy.destroySwapchainKHR(old_handle, null);
+    }
 
     // set current handle to NULL_HANDLE to signal that the current swapchain does no longer need to be
     // de-initialized if we fail to recreate it.
     self.handle = .null_handle;
-    self.* = try initRecycle(device, instance, surface, screen_width, screen_height, gpa, gpu_alloc, old_handle);
+    self.* = new;
 }
 
 fn deinitExceptSwapchain(self: *Swapchain, device: *const Device) void {
@@ -185,7 +187,7 @@ fn deinitExceptSwapchain(self: *Swapchain, device: *const Device) void {
 }
 
 pub fn deinit(self: *Swapchain, device: *const Device) void {
-    self.deinitExceptSwapchain(device);
+    if (self.handle != .null_handle) self.deinitExceptSwapchain(device);
     device.proxy.destroySwapchainKHR(self.handle, null);
 }
 

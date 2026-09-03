@@ -38,12 +38,19 @@ const RequiredFeatures = struct {
     feats12: vk.PhysicalDeviceVulkan12Features = .{
         .timeline_semaphore = .true,
         .buffer_device_address = .true,
+        .scalar_block_layout = .true,
+    },
+    feats11: vk.PhysicalDeviceVulkan11Features = .{
+        .shader_draw_parameters = .true,
     },
 
     fn chain(rf: *RequiredFeatures) vk.PhysicalDeviceFeatures2 {
+        rf.feats11.p_next = &rf.feats12;
         rf.feats12.p_next = &rf.feats13;
         rf.feats13.p_next = &rf.feats14;
-        return .{ .p_next = &rf.feats12, .features = .{} };
+        return .{ .p_next = &rf.feats11, .features = .{
+            .shader_int_16 = .true,
+        } };
     }
 
     fn isSupported(rf: *const RequiredFeatures) bool {
@@ -55,7 +62,6 @@ const RequiredFeatures = struct {
 
 proxy: vk.DeviceProxy,
 pdevice: vk.PhysicalDevice,
-mem_props: vk.PhysicalDeviceMemoryProperties,
 graphics_queue: Queue,
 present_queue: Queue, // in theory, provides minor performance boost
 
@@ -101,7 +107,6 @@ pub fn init(instance: *const Instance, surface: vk.SurfaceKHR, gpa: std.mem.Allo
     return .{
         .proxy = proxy,
         .pdevice = pdevice,
-        .mem_props = instance.proxy.getPhysicalDeviceMemoryProperties(pdevice),
         .graphics_queue = .init(proxy, graphics_family_index),
         .present_queue = .init(proxy, present_family_index),
     };
