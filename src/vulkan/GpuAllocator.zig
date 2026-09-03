@@ -21,9 +21,14 @@ fn findMemoryTypeIndex(self: GpuAllocator, memory_types: u32, flags: vk.MemoryPr
     return error.NoSuitableMemoryType;
 }
 
-pub fn allocate(self: GpuAllocator, requirements: vk.MemoryRequirements, flags: vk.MemoryPropertyFlags) !vk.DeviceMemory {
+pub fn allocate(self: GpuAllocator, requirements: vk.MemoryRequirements, properties: vk.MemoryPropertyFlags, flags: vk.MemoryAllocateFlags) !vk.DeviceMemory {
+    const allocate_flags_info = vk.MemoryAllocateFlagsInfo{
+        .flags = flags,
+        .device_mask = 0,
+    };
     return try self.device.proxy.allocateMemory(&.{
+        .p_next = &allocate_flags_info,
         .allocation_size = requirements.size,
-        .memory_type_index = try self.findMemoryTypeIndex(requirements.memory_type_bits, flags),
+        .memory_type_index = try self.findMemoryTypeIndex(requirements.memory_type_bits, properties),
     }, null);
 }

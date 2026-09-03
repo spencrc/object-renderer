@@ -23,9 +23,6 @@ const FrameResources = struct {
     command_pool: vk.CommandPool, // per frame resource command pool = faster command buffer reset
     command_buffer: vk.CommandBuffer,
     image_acquired_semaphore: vk.Semaphore, // used to block rendering until able to present (go-ahead from GPU)
-    uniform_buffer: Buffer,
-    p_ubo_data: ?*anyopaque,
-    descriptor_set: vk.DescriptorSet,
 };
 
 const UniformBufferObject = struct {
@@ -47,7 +44,6 @@ swapchain: Swapchain,
 pipeline: GraphicsPipeline,
 
 timeline_semaphore: vk.Semaphore,
-descriptor_pool: vk.DescriptorPool,
 frame_resources: [max_frames_in_flight]FrameResources,
 
 vertex_buffer: Buffer,
@@ -86,19 +82,7 @@ pub fn init(
     }, null);
     errdefer device.proxy.destroySemaphore(timeline_semaphore, null);
 
-    const pool_size = vk.DescriptorPoolSize{
-        .descriptor_count = max_frames_in_flight,
-        .type = .uniform_buffer,
-    };
-    const descriptor_pool = try device.proxy.createDescriptorPool(&.{
-        .flags = .{ .free_descriptor_set_bit = true },
-        .max_sets = max_frames_in_flight,
-        .pool_size_count = 1,
-        .p_pool_sizes = &[_]vk.DescriptorPoolSize{pool_size},
-    }, null);
-    errdefer device.proxy.destroyDescriptorPool(descriptor_pool, null);
-
-    const frame_resources = try initFrameResources(&device, &pipeline, descriptor_pool, gpu_alloc);
+    const frame_resources = try initFrameResources(&device);
     errdefer deinitFrameResources(&device, frame_resources);
 
     const command_pool = try device.proxy.createCommandPool(&.{
@@ -109,8 +93,9 @@ pub fn init(
     const vertex_buffer: Buffer = try .init(
         &device,
         @sizeOf(@TypeOf(vertices)),
-        .{ .transfer_dst_bit = true, .vertex_buffer_bit = true },
+        .{ .transfer_dst_bit = true, .vertex_buffer_bit = true, .shader_device_address_bit = true },
         .{ .device_local_bit = true },
+        .{ .device_address_bit = true },
         gpu_alloc,
     );
     errdefer vertex_buffer.deinit(&device);
@@ -119,8 +104,9 @@ pub fn init(
     const index_buffer: Buffer = try .init(
         &device,
         @sizeOf(@TypeOf(indices)),
-        .{ .transfer_dst_bit = true, .index_buffer_bit = true },
+        .{ .transfer_dst_bit = true, .index_buffer_bit = true, .shader_device_address_bit = true },
         .{ .device_local_bit = true },
+        .{ .device_address_bit = true },
         gpu_alloc,
     );
     errdefer index_buffer.deinit(&device);
@@ -134,7 +120,6 @@ pub fn init(
         .swapchain = swapchain,
         .pipeline = pipeline,
         .timeline_semaphore = timeline_semaphore,
-        .descriptor_pool = descriptor_pool,
         .frame_resources = frame_resources,
         .vertex_buffer = vertex_buffer,
         .index_buffer = index_buffer,
@@ -149,7 +134,6 @@ pub fn deinit(self: *GraphicsContext) void {
 
     deinitFrameResources(&self.device, self.frame_resources);
 
-    self.device.proxy.destroyDescriptorPool(self.descriptor_pool, null);
     self.device.proxy.destroySemaphore(self.timeline_semaphore, null);
 
     self.pipeline.deinit(&self.device);
@@ -162,20 +146,9 @@ pub fn deinit(self: *GraphicsContext) void {
 }
 
 /// Initializes array of frame resources for GraphicsContext
-fn initFrameResources(device: *const Device, pipeline: *const GraphicsPipeline, descriptor_pool: vk.DescriptorPool, gpu_alloc: GpuAllocator) ![max_frames_in_flight]FrameResources {
-    var descriptor_layouts: [max_frames_in_flight]vk.DescriptorSetLayout = undefined;
-    for (&descriptor_layouts) |*layout| {
-        layout.* = pipeline.descriptor_set_layout;
-    }
-    var descriptor_sets: [max_frames_in_flight]vk.DescriptorSet = undefined;
-    try device.proxy.allocateDescriptorSets(&.{
-        .descriptor_pool = descriptor_pool,
-        .descriptor_set_count = descriptor_layouts.len,
-        .p_set_layouts = &descriptor_layouts,
-    }, &descriptor_sets);
-
+fn initFrameResources(device: *const Device) ![max_frames_in_flight]FrameResources {
     var frame_resources: [max_frames_in_flight]FrameResources = undefined;
-    for (&frame_resources, 0..) |*res, i| {
+    for (&frame_resources) |*res| {
         const image_acquired_semaphore = try device.proxy.createSemaphore(&.{}, null);
         errdefer device.proxy.destroySemaphore(image_acquired_semaphore, null);
 
@@ -191,42 +164,10 @@ fn initFrameResources(device: *const Device, pipeline: *const GraphicsPipeline, 
             .command_buffer_count = 1,
         }, @ptrCast(&command_buffer));
 
-        var uniform_buffer: Buffer = try .init(
-            device,
-            @sizeOf(UniformBufferObject),
-            .{ .uniform_buffer_bit = true },
-            .{ .host_visible_bit = true, .host_coherent_bit = true },
-            gpu_alloc,
-        );
-        errdefer uniform_buffer.deinit(device);
-
-        const data = try device.proxy.mapMemory(uniform_buffer.memory, 0, vk.WHOLE_SIZE, .{});
-        errdefer device.proxy.unmapMemory(uniform_buffer.memory);
-
-        device.proxy.updateDescriptorSets(&[_]vk.WriteDescriptorSet{
-            .{
-                .dst_set = descriptor_sets[i],
-                .dst_binding = 0,
-                .dst_array_element = 0,
-                .descriptor_count = 1,
-                .descriptor_type = .uniform_buffer,
-                .p_buffer_info = &[_]vk.DescriptorBufferInfo{.{
-                    .buffer = uniform_buffer.handle,
-                    .offset = 0,
-                    .range = @sizeOf(UniformBufferObject),
-                }},
-                .p_image_info = undefined,
-                .p_texel_buffer_view = undefined,
-            },
-        }, null);
-
         res.* = .{
             .image_acquired_semaphore = image_acquired_semaphore,
             .command_pool = command_pool,
             .command_buffer = command_buffer,
-            .uniform_buffer = uniform_buffer,
-            .p_ubo_data = data,
-            .descriptor_set = descriptor_sets[i],
         };
     }
     return frame_resources;
@@ -237,8 +178,6 @@ fn deinitFrameResources(device: *const Device, frame_resources: [max_frames_in_f
         device.proxy.freeCommandBuffers(res.command_pool, &.{res.command_buffer});
         device.proxy.destroyCommandPool(res.command_pool, null);
         device.proxy.destroySemaphore(res.image_acquired_semaphore, null);
-        device.proxy.unmapMemory(res.uniform_buffer.memory);
-        res.uniform_buffer.deinit(device);
     }
 }
 
@@ -288,8 +227,6 @@ pub fn render(self: *GraphicsContext, screen_width: usize, screen_height: usize)
     };
 
     const image_index = acquire_result.image_index;
-
-    updateUniformBuffer(res.p_ubo_data, screen_width, screen_height);
 
     // begin recording commands
     try device.beginCommandBuffer(res.command_buffer, &.{
@@ -391,11 +328,29 @@ pub fn render(self: *GraphicsContext, screen_width: usize, screen_height: usize)
         };
         device.cmdSetScissor(res.command_buffer, 0, &[_]vk.Rect2D{scissor});
 
+        const screen_width_f32: f32 = @floatFromInt(screen_width);
+        const screen_height_f32: f32 = @floatFromInt(screen_height);
+        var proj: math.Mat4 = .persp(75, screen_width_f32 / screen_height_f32, 0.1, 10);
+        proj.m[1][1] *= -1;
+        const push_data = GraphicsPipeline.PushConstants{
+            .vertex_buffer_address = self.vertex_buffer.device_address,
+            .index_buffer_address = self.index_buffer.device_address,
+            .model = .rotate(90, math.Vec3{ .x = 0, .y = 0, .z = 1 }),
+            .view = .lookat(math.Vec3{ .x = 2, .y = 2, .z = 2 }, math.Vec3{ .x = 0, .y = 0, .z = 0 }, math.Vec3{ .x = 0, .y = 0, .z = 1 }),
+            .proj = proj,
+        };
+        device.cmdPushConstants(
+            res.command_buffer,
+            self.pipeline.pipeline_layout,
+            .{ .vertex_bit = true },
+            0,
+            @sizeOf(GraphicsPipeline.PushConstants),
+            @ptrCast(&push_data),
+        );
+
         device.cmdBindPipeline(res.command_buffer, .graphics, self.pipeline.handle);
-        device.cmdBindVertexBuffers(res.command_buffer, 0, &[_]vk.Buffer{self.vertex_buffer.handle}, &[_]u64{0});
-        device.cmdBindIndexBuffer(res.command_buffer, self.index_buffer.handle, 0, .uint16);
-        device.cmdBindDescriptorSets(res.command_buffer, .graphics, self.pipeline.pipeline_layout, 0, &[_]vk.DescriptorSet{res.descriptor_set}, null);
-        device.cmdDrawIndexed(res.command_buffer, indices.len, 1, 0, 0, 0);
+        // using cmdDrawIndexed will lead to unreadable data for shaders due to device address usage
+        device.cmdDraw(res.command_buffer, indices.len, 1, 0, 0);
     }
     device.cmdEndRendering(res.command_buffer);
 
@@ -482,15 +437,4 @@ pub fn render(self: *GraphicsContext, screen_width: usize, screen_height: usize)
         .success => self.recreate_swapchain,
         else => unreachable,
     };
-}
-
-fn updateUniformBuffer(ubo_data: ?*anyopaque, screen_width: usize, screen_height: usize) void {
-    var ubo = UniformBufferObject{
-        .model = .rotate(90, math.Vec3{ .x = 0, .y = 0, .z = 1 }),
-        .view = .lookat(math.Vec3{ .x = 2, .y = 2, .z = 2 }, math.Vec3{ .x = 0, .y = 0, .z = 0 }, math.Vec3{ .x = 0, .y = 0, .z = 1 }),
-        .proj = .persp(75, @floatFromInt(screen_width / screen_height), 0.1, 10),
-    };
-    ubo.proj.m[1][1] *= -1;
-    const gpu_data: *UniformBufferObject = @ptrCast(@alignCast(ubo_data));
-    gpu_data.* = ubo;
 }

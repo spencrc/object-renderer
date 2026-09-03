@@ -37,6 +37,7 @@ const RequiredFeatures = struct {
     },
     feats12: vk.PhysicalDeviceVulkan12Features = .{
         .timeline_semaphore = .true,
+        .buffer_device_address = .true,
     },
 
     fn chain(rf: *RequiredFeatures) vk.PhysicalDeviceFeatures2 {

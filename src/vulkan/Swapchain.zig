@@ -123,7 +123,7 @@ fn initRecycle(device: *const Device, instance: *const Instance, surface: vk.Sur
     }, null);
     errdefer device.proxy.destroyImage(depth_image, null);
     const image_mem_reqs = device.proxy.getImageMemoryRequirements(depth_image);
-    const image_mem = try gpu_alloc.allocate(image_mem_reqs, .{ .device_local_bit = true });
+    const image_mem = try gpu_alloc.allocate(image_mem_reqs, .{ .device_local_bit = true }, .{});
     errdefer device.proxy.freeMemory(image_mem, null);
     try device.proxy.bindImageMemory(depth_image, image_mem, 0);
 

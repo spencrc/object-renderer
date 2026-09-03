@@ -7,9 +7,10 @@ const Buffer = @This();
 
 handle: vk.Buffer,
 memory: vk.DeviceMemory,
+device_address: vk.DeviceAddress,
 
 /// Method that returns a Buffer struct containing the VkBuffer and VkDeviceMemory objects
-pub fn init(device: *const Device, size: vk.DeviceSize, usage: vk.BufferUsageFlags, properties: vk.MemoryPropertyFlags, gpu_alloc: GpuAllocator) !Buffer {
+pub fn init(device: *const Device, size: vk.DeviceSize, usage: vk.BufferUsageFlags, properties: vk.MemoryPropertyFlags, flags: vk.MemoryAllocateFlags, gpu_alloc: GpuAllocator) !Buffer {
     const buffer = try device.proxy.createBuffer(&.{
         .size = size,
         .usage = usage,
@@ -17,12 +18,15 @@ pub fn init(device: *const Device, size: vk.DeviceSize, usage: vk.BufferUsageFla
     }, null);
     errdefer device.proxy.destroyBuffer(buffer, null);
     const mem_reqs = device.proxy.getBufferMemoryRequirements(buffer);
-    const mem = try gpu_alloc.allocate(mem_reqs, properties);
+    const mem = try gpu_alloc.allocate(mem_reqs, properties, flags);
     errdefer device.proxy.freeMemory(mem, null);
     try device.proxy.bindBufferMemory(buffer, mem, 0);
+    // Vulkan defines the integer value of 0 to be null (as everyone would hopefully expect!).
+    const device_address = if (usage.shader_device_address_bit and flags.device_address_bit) device.proxy.getBufferDeviceAddress(&.{ .buffer = buffer }) else 0;
     return .{
         .handle = buffer,
         .memory = mem,
+        .device_address = device_address,
     };
 }
 
@@ -39,6 +43,7 @@ pub fn uploadTo(dst: Buffer, device: *const Device, command_pool: vk.CommandPool
         size,
         .{ .transfer_src_bit = true },
         .{ .host_visible_bit = true, .host_coherent_bit = true },
+        .{},
         gpu_alloc,
     );
     errdefer staging_buffer.deinit(device);

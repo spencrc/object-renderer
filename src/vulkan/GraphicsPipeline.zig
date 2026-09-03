@@ -1,5 +1,6 @@
 const std = @import("std");
 const vk = @import("vulkan");
+const math = @import("math.zig");
 const Device = @import("Device.zig");
 const Vertex = @import("vertex.zig");
 const Swapchain = @import("Swapchain.zig");
@@ -7,31 +8,31 @@ const Swapchain = @import("Swapchain.zig");
 const vert_spv align(@alignOf(u32)) = @embedFile("vertex_shader").*; // bytecode pointer is u32, hence the align
 const frag_spv align(@alignOf(u32)) = @embedFile("fragment_shader").*;
 
+pub const PushConstants = struct {
+    vertex_buffer_address: vk.DeviceAddress,
+    index_buffer_address: vk.DeviceAddress,
+    model: math.Mat4,
+    view: math.Mat4,
+    proj: math.Mat4,
+};
+
 const GraphicsPipeline = @This();
 
-descriptor_set_layout: vk.DescriptorSetLayout,
 pipeline_layout: vk.PipelineLayout,
 handle: vk.Pipeline,
 
 pub fn init(device: *const Device, format: vk.Format) !GraphicsPipeline {
-    const ubo_layout = vk.DescriptorSetLayoutBinding{
-        .binding = 0,
-        .descriptor_type = .uniform_buffer,
-        .descriptor_count = 1,
-        .stage_flags = .{ .vertex_bit = true },
+    const push_constant_ranges = [_]vk.PushConstantRange{
+        .{
+            .offset = 0,
+            .stage_flags = .{ .vertex_bit = true },
+            .size = @sizeOf(PushConstants),
+        },
     };
-    const descriptor_set_layout = try device.proxy.createDescriptorSetLayout(&.{
-        .binding_count = 1,
-        .p_bindings = &[_]vk.DescriptorSetLayoutBinding{ubo_layout},
-    }, null);
-    errdefer device.proxy.destroyDescriptorSetLayout(descriptor_set_layout, null);
 
     const pipeline_layout = try device.proxy.createPipelineLayout(&.{
-        .flags = .{},
-        .set_layout_count = 1,
-        .p_set_layouts = &[_]vk.DescriptorSetLayout{descriptor_set_layout},
-        .push_constant_range_count = 0,
-        .p_push_constant_ranges = undefined,
+        .push_constant_range_count = push_constant_ranges.len,
+        .p_push_constant_ranges = &push_constant_ranges,
     }, null);
     errdefer device.proxy.destroyPipelineLayout(pipeline_layout, null);
 
@@ -188,12 +189,10 @@ pub fn init(device: *const Device, format: vk.Format) !GraphicsPipeline {
     return .{
         .handle = pipeline,
         .pipeline_layout = pipeline_layout,
-        .descriptor_set_layout = descriptor_set_layout,
     };
 }
 
 pub fn deinit(self: GraphicsPipeline, device: *const Device) void {
     device.proxy.destroyPipeline(self.handle, null);
     device.proxy.destroyPipelineLayout(self.pipeline_layout, null);
-    device.proxy.destroyDescriptorSetLayout(self.descriptor_set_layout, null);
 }
