@@ -113,7 +113,7 @@ pub fn init(device: *const Device, format: vk.Format) !GraphicsPipeline {
         .rasterizer_discard_enable = .false,
         .polygon_mode = .fill,
         .line_width = 1.0,
-        .cull_mode = .{},
+        .cull_mode = .{ .back_bit = true },
         .front_face = .clockwise,
         .depth_bias_enable = .false,
         .depth_bias_constant_factor = 0,

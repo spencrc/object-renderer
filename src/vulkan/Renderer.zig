@@ -12,12 +12,25 @@ const GraphicsPipeline = @import("GraphicsPipeline.zig");
 
 const max_frames_in_flight = 2;
 const vertices = [_]Vertex{
-    .{ .pos = .{ -0.5, -0.5 }, .color = .{ 1, 0, 0 } },
-    .{ .pos = .{ 0.5, -0.5 }, .color = .{ 0, 1, 0 } },
-    .{ .pos = .{ 0.5, 0.5 }, .color = .{ 0, 0, 1 } },
-    .{ .pos = .{ -0.5, 0.5 }, .color = .{ 1, 1, 1 } },
+    // bottom face
+    .{ .pos = .{ -0.5, -0.5, -0.5 }, .color = .{ 1, 0, 0 } }, // back left
+    .{ .pos = .{ 0.5, -0.5, -0.5 }, .color = .{ 0, 1, 0 } }, // back right
+    .{ .pos = .{ 0.5, 0.5, -0.5 }, .color = .{ 0, 0, 1 } }, // front right
+    .{ .pos = .{ -0.5, 0.5, -0.5 }, .color = .{ 1, 1, 1 } }, // front left
+    // top face
+    .{ .pos = .{ -0.5, -0.5, 0.5 }, .color = .{ 1, 0, 0 } },
+    .{ .pos = .{ 0.5, -0.5, 0.5 }, .color = .{ 0, 1, 0 } },
+    .{ .pos = .{ 0.5, 0.5, 0.5 }, .color = .{ 0, 0, 1 } },
+    .{ .pos = .{ -0.5, 0.5, 0.5 }, .color = .{ 1, 1, 1 } },
 };
-const indices = [_]u16{ 0, 1, 2, 2, 3, 0 };
+const indices = [_]u16{
+    0, 1, 2, 2, 3, 0, // bottom
+    6, 5, 4, 4, 7, 6, // top
+    6, 7, 3, 3, 2, 6, // front
+    0, 4, 5, 5, 1, 0, // back
+    4, 0, 3, 3, 7, 4, // left
+    1, 5, 6, 6, 2, 1, // right
+};
 
 const FrameResources = struct {
     command_pool: vk.CommandPool, // per frame resource command pool = faster command buffer reset
