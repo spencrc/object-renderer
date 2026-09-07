@@ -39,6 +39,8 @@ const RequiredFeatures = struct {
         .timeline_semaphore = .true,
         .buffer_device_address = .true,
         .scalar_block_layout = .true,
+        .descriptor_binding_uniform_buffer_update_after_bind = .true,
+        .descriptor_binding_partially_bound = .true,
     },
     feats11: vk.PhysicalDeviceVulkan11Features = .{
         .shader_draw_parameters = .true,

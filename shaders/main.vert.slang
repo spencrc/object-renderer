@@ -8,11 +8,14 @@ struct PushConstants {
     uint pad1;
     uint pad2;
     float4x4 model;
+};
+[[vk::push_constant]] PushConstants pcs;
+
+struct UniformBuffer {
     float4x4 view;
     float4x4 proj;
 };
-
-[[vk::push_constant]] PushConstants pcs;
+ConstantBuffer<UniformBuffer> ubo;
 
 struct VSOutput
 {
@@ -26,7 +29,7 @@ VSOutput main(uint16_t vertexID : SV_VertexID)
     Vertex v = pcs.vertexBuffer[vertexID];
 
     VSOutput output;
-    output.pos = mul(pcs.proj, mul(pcs.view, mul(pcs.model, float4(v.position, 1.0))));
+    output.pos = mul(ubo.proj, mul(ubo.view, mul(pcs.model, float4(v.position, 1.0))));
     output.color = v.color;
     return output;
 }

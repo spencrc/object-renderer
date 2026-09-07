@@ -12,8 +12,6 @@ pub const PushConstants = struct {
     vertex_buffer_address: vk.DeviceAddress,
     _padding: u64 = 0,
     model: math.Mat4,
-    view: math.Mat4,
-    proj: math.Mat4,
 };
 
 const GraphicsPipeline = @This();
@@ -21,7 +19,7 @@ const GraphicsPipeline = @This();
 pipeline_layout: vk.PipelineLayout,
 handle: vk.Pipeline,
 
-pub fn init(device: *const Device, format: vk.Format) !GraphicsPipeline {
+pub fn init(device: *const Device, format: vk.Format, descriptor_set_layout: vk.DescriptorSetLayout) !GraphicsPipeline {
     const push_constant_ranges = [_]vk.PushConstantRange{
         .{
             .offset = 0,
@@ -33,6 +31,8 @@ pub fn init(device: *const Device, format: vk.Format) !GraphicsPipeline {
     const pipeline_layout = try device.proxy.createPipelineLayout(&.{
         .push_constant_range_count = push_constant_ranges.len,
         .p_push_constant_ranges = &push_constant_ranges,
+        .set_layout_count = 1,
+        .p_set_layouts = &[_]vk.DescriptorSetLayout{descriptor_set_layout},
     }, null);
     errdefer device.proxy.destroyPipelineLayout(pipeline_layout, null);
 
