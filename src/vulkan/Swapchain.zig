@@ -205,6 +205,7 @@ pub fn recreate(self: *Swapchain, device: *const Device, instance: *const Instan
 
     try device.proxy.deviceWaitIdle();
 
+    self.gpu_arena.reset();
     const new: Swapchain = try initRecycle(device, instance, surface, screen_width, screen_height, gpa, gpu_arena, old_handle);
     // const new: Swapchain = try initRecycle(device, instance, surface, screen_width, screen_height, gpa, gpu_alloc, old_handle);
 
@@ -230,7 +231,6 @@ fn deinitExceptSwapchain(self: *Swapchain, device: *const Device) void {
     self.gpa.free(self.swap_image_views);
     // swap_images owned by swapchain itself, and will be cleaned when swapchain destroyed
     self.gpa.free(self.swap_images);
-    self.gpu_arena.reset();
 }
 
 pub fn deinit(self: *Swapchain, device: *const Device) void {
