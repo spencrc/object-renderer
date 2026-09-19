@@ -10,8 +10,8 @@ pub const depth_format = vk.Format.d32_sfloat;
 const Swapchain = @This();
 
 gpa: std.mem.Allocator,
-// gpu_arena: GpuArena,
-gpu_alloc: GpuAllocator,
+gpu_arena: GpuArena,
+// gpu_alloc: GpuAllocator,
 
 handle: vk.SwapchainKHR,
 surface_format: vk.SurfaceFormatKHR,
@@ -20,7 +20,7 @@ swap_images: []vk.Image,
 swap_image_views: []vk.ImageView,
 render_complete_semaphores: []vk.Semaphore,
 depth_image: vk.Image,
-depth_image_mem: vk.DeviceMemory,
+// depth_image_mem: vk.DeviceMemory,
 depth_image_view: vk.ImageView,
 
 /// Initializes swapchain with correct surface format, extent, and present mode for Renderer
@@ -31,8 +31,8 @@ pub fn init(
     screen_width: usize,
     screen_height: usize,
     gpa: std.mem.Allocator,
-    gpu_alloc: GpuAllocator,
-    // gpu_arena: GpuArena,
+    // gpu_alloc: GpuAllocator,
+    gpu_arena: GpuArena,
 ) !Swapchain {
     return initRecycle(
         device,
@@ -41,8 +41,8 @@ pub fn init(
         screen_width,
         screen_height,
         gpa,
-        // gpu_arena,
-        gpu_alloc,
+        gpu_arena,
+        // gpu_alloc,
         .null_handle,
     );
 }
@@ -55,8 +55,8 @@ fn initRecycle(
     screen_width: usize,
     screen_height: usize,
     gpa: std.mem.Allocator,
-    gpu_alloc: GpuAllocator,
-    // gpu_arena: GpuArena,
+    // gpu_alloc: GpuAllocator,
+    gpu_arena: GpuArena,
     old_handle: vk.SwapchainKHR,
 ) !Swapchain {
     const caps = try instance.proxy.getPhysicalDeviceSurfaceCapabilitiesKHR(device.pdevice, surface);
@@ -150,11 +150,11 @@ fn initRecycle(
     }, null);
     errdefer device.proxy.destroyImage(depth_image, null);
     const image_mem_reqs = device.proxy.getImageMemoryRequirements(depth_image);
-    // const image_alloc = try gpu_arena.allocate_image(image_mem_reqs, .{ .device_local_bit = true }, .optimal);
-    // try device.proxy.bindImageMemory(depth_image, image_alloc.handle, image_alloc.offset);
-    const image_mem = try gpu_alloc.allocate(image_mem_reqs, .{ .device_local_bit = true }, .{});
-    errdefer device.proxy.freeMemory(image_mem, null);
-    try device.proxy.bindImageMemory(depth_image, image_mem, 0);
+    const image_alloc = try gpu_arena.allocate_image(image_mem_reqs, .{ .device_local_bit = true }, .optimal);
+    try device.proxy.bindImageMemory(depth_image, image_alloc.handle, image_alloc.offset);
+    // const image_mem = try gpu_alloc.allocate(image_mem_reqs, .{ .device_local_bit = true }, .{});
+    // errdefer device.proxy.freeMemory(image_mem, null);
+    // try device.proxy.bindImageMemory(depth_image, image_mem, 0);
 
     const depth_image_view = try device.proxy.createImageView(&.{
         .image = depth_image,
@@ -173,8 +173,8 @@ fn initRecycle(
 
     return Swapchain{
         .gpa = gpa,
-        // .gpu_arena = gpu_arena,
-        .gpu_alloc = gpu_alloc,
+        .gpu_arena = gpu_arena,
+        // .gpu_alloc = gpu_alloc,
         .surface_format = surface_format,
         .extent = actual_extent,
         .handle = swapchain,
@@ -182,7 +182,7 @@ fn initRecycle(
         .swap_image_views = swap_image_views,
         .render_complete_semaphores = render_complete_semaphores,
         .depth_image = depth_image,
-        .depth_image_mem = image_mem,
+        // .depth_image_mem = image_mem,
         .depth_image_view = depth_image_view,
     };
 }
@@ -195,14 +195,14 @@ pub fn recreate(self: *Swapchain, device: *const Device, instance: *const Instan
     defer zone.end();
 
     const gpa = self.gpa;
-    // const gpu_arena = self.gpu_arena;
-    const gpu_alloc = self.gpu_alloc;
+    const gpu_arena = self.gpu_arena;
+    // const gpu_alloc = self.gpu_alloc;
     const old_handle = self.handle;
 
     try device.proxy.deviceWaitIdle();
 
-    // const new: Swapchain = try initRecycle(device, instance, surface, screen_width, screen_height, gpa, gpu_arena, old_handle);
-    const new: Swapchain = try initRecycle(device, instance, surface, screen_width, screen_height, gpa, gpu_alloc, old_handle);
+    const new: Swapchain = try initRecycle(device, instance, surface, screen_width, screen_height, gpa, gpu_arena, old_handle);
+    // const new: Swapchain = try initRecycle(device, instance, surface, screen_width, screen_height, gpa, gpu_alloc, old_handle);
 
     self.deinitExceptSwapchain(device);
 
@@ -218,7 +218,7 @@ pub fn recreate(self: *Swapchain, device: *const Device, instance: *const Instan
 
 fn deinitExceptSwapchain(self: *Swapchain, device: *const Device) void {
     device.proxy.destroyImageView(self.depth_image_view, null);
-    device.proxy.freeMemory(self.depth_image_mem, null);
+    // device.proxy.freeMemory(self.depth_image_mem, null);
     device.proxy.destroyImage(self.depth_image, null);
     for (self.render_complete_semaphores) |s| device.proxy.destroySemaphore(s, null);
     self.gpa.free(self.render_complete_semaphores);
@@ -226,7 +226,7 @@ fn deinitExceptSwapchain(self: *Swapchain, device: *const Device) void {
     self.gpa.free(self.swap_image_views);
     // swap_images owned by swapchain itself, and will be cleaned when swapchain destroyed
     self.gpa.free(self.swap_images);
-    // self.gpu_arena.reset();
+    self.gpu_arena.reset();
 }
 
 pub fn deinit(self: *Swapchain, device: *const Device) void {

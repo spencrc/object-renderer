@@ -97,7 +97,7 @@ pub fn init(
     var gpu_arena: GpuArena = try .init(device.proxy, mem_props, gpa);
     errdefer gpu_arena.deinit();
 
-    var swapchain: Swapchain = try .init(&device, instance, surface, screen_width, screen_height, gpa, gpu_alloc);
+    var swapchain: Swapchain = try .init(&device, instance, surface, screen_width, screen_height, gpa, gpu_arena);
     errdefer swapchain.deinit(&device);
 
     const descriptor_set_info = try initDescriptorSet(&device);
