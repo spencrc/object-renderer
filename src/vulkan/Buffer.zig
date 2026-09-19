@@ -9,8 +9,11 @@ handle: vk.Buffer,
 memory: vk.DeviceMemory,
 device_address: vk.DeviceAddress,
 
-/// Method that returns a Buffer struct containing the VkBuffer and VkDeviceMemory objects
+/// Method that returns a Buffer struct containing the VkBuffer and VkDeviceMemory objects. Asserts usage and flag BDA bit are same truth value
+// TODO: possibly improve API by taking bda as a bool to enable it or not
+// can simplify GpuArenaAllocator as well if we take bda enabled as a bool
 pub fn init(device: *const Device, size: vk.DeviceSize, usage: vk.BufferUsageFlags, properties: vk.MemoryPropertyFlags, flags: vk.MemoryAllocateFlags, gpu_alloc: GpuAllocator) !Buffer {
+    std.debug.assert(usage.shader_device_address_bit == flags.device_address_bit);
     const buffer = try device.proxy.createBuffer(&.{
         .size = size,
         .usage = usage,
@@ -36,30 +39,15 @@ pub fn deinit(self: *const Buffer, device: *const Device) void {
 }
 
 /// Takes objects of type T and copys them into the provided buffer
-pub fn uploadTo(dst: Buffer, device: *const Device, command_pool: vk.CommandPool, comptime T: type, objects: []const T, gpu_alloc: GpuAllocator) !void {
-    const size = @sizeOf(T) * objects.len;
-    const staging_buffer: Buffer = try .init(
-        device,
-        size,
-        .{ .transfer_src_bit = true },
-        .{ .host_visible_bit = true, .host_coherent_bit = true },
-        .{},
-        gpu_alloc,
-    );
-    defer staging_buffer.deinit(device);
+pub fn uploadTo(src: Buffer, comptime T: type, objects: []const T, device: *const Device) !void {
+    const data = try device.proxy.mapMemory(src.memory, 0, vk.WHOLE_SIZE, .{});
+    defer device.proxy.unmapMemory(src.memory);
 
-    {
-        const data = try device.proxy.mapMemory(staging_buffer.memory, 0, vk.WHOLE_SIZE, .{});
-        defer device.proxy.unmapMemory(staging_buffer.memory);
-
-        const gpu_objects: [*]T = @ptrCast(@alignCast(data));
-        @memcpy(gpu_objects, objects[0..]);
-    }
-
-    try copyBuffer(device, command_pool, staging_buffer, dst, size);
+    const gpu_objects: [*]T = @ptrCast(@alignCast(data));
+    @memcpy(gpu_objects, objects[0..]);
 }
 
-fn copyBuffer(device: *const Device, command_pool: vk.CommandPool, src: Buffer, dst: Buffer, size: vk.DeviceSize) !void {
+pub fn copyTo(src: Buffer, dst: Buffer, size: vk.DeviceSize, device: *const Device, command_pool: vk.CommandPool) !void {
     var command_buffer: vk.CommandBuffer = undefined;
     try device.proxy.allocateCommandBuffers(&.{
         .command_pool = command_pool,
