@@ -2,6 +2,7 @@ const vk = @import("vulkan");
 const std = @import("std");
 const Instance = @import("Instance.zig");
 const Device = @import("Device.zig");
+const GpuArena = @import("GpuArenaAllocator.zig");
 const GpuAllocator = @import("GpuAllocator.zig");
 
 pub const depth_format = vk.Format.d32_sfloat;
@@ -9,6 +10,7 @@ pub const depth_format = vk.Format.d32_sfloat;
 const Swapchain = @This();
 
 gpa: std.mem.Allocator,
+// gpu_arena: GpuArena,
 gpu_alloc: GpuAllocator,
 
 handle: vk.SwapchainKHR,
@@ -22,12 +24,41 @@ depth_image_mem: vk.DeviceMemory,
 depth_image_view: vk.ImageView,
 
 /// Initializes swapchain with correct surface format, extent, and present mode for Renderer
-pub fn init(device: *const Device, instance: *const Instance, surface: vk.SurfaceKHR, screen_width: usize, screen_height: usize, gpa: std.mem.Allocator, gpu_alloc: GpuAllocator) !Swapchain {
-    return initRecycle(device, instance, surface, screen_width, screen_height, gpa, gpu_alloc, .null_handle);
+pub fn init(
+    device: *const Device,
+    instance: *const Instance,
+    surface: vk.SurfaceKHR,
+    screen_width: usize,
+    screen_height: usize,
+    gpa: std.mem.Allocator,
+    gpu_alloc: GpuAllocator,
+    // gpu_arena: GpuArena,
+) !Swapchain {
+    return initRecycle(
+        device,
+        instance,
+        surface,
+        screen_width,
+        screen_height,
+        gpa,
+        // gpu_arena,
+        gpu_alloc,
+        .null_handle,
+    );
 }
 
 // TODO: use some kind of create info / opts struct to pass in all these vars
-fn initRecycle(device: *const Device, instance: *const Instance, surface: vk.SurfaceKHR, screen_width: usize, screen_height: usize, gpa: std.mem.Allocator, gpu_alloc: GpuAllocator, old_handle: vk.SwapchainKHR) !Swapchain {
+fn initRecycle(
+    device: *const Device,
+    instance: *const Instance,
+    surface: vk.SurfaceKHR,
+    screen_width: usize,
+    screen_height: usize,
+    gpa: std.mem.Allocator,
+    gpu_alloc: GpuAllocator,
+    // gpu_arena: GpuArena,
+    old_handle: vk.SwapchainKHR,
+) !Swapchain {
     const caps = try instance.proxy.getPhysicalDeviceSurfaceCapabilitiesKHR(device.pdevice, surface);
     const actual_extent = findSwapExtent(caps, screen_width, screen_height);
     if (actual_extent.width == 0 or actual_extent.height == 0) {
@@ -119,6 +150,8 @@ fn initRecycle(device: *const Device, instance: *const Instance, surface: vk.Sur
     }, null);
     errdefer device.proxy.destroyImage(depth_image, null);
     const image_mem_reqs = device.proxy.getImageMemoryRequirements(depth_image);
+    // const image_alloc = try gpu_arena.allocate_image(image_mem_reqs, .{ .device_local_bit = true }, .optimal);
+    // try device.proxy.bindImageMemory(depth_image, image_alloc.handle, image_alloc.offset);
     const image_mem = try gpu_alloc.allocate(image_mem_reqs, .{ .device_local_bit = true }, .{});
     errdefer device.proxy.freeMemory(image_mem, null);
     try device.proxy.bindImageMemory(depth_image, image_mem, 0);
@@ -140,6 +173,7 @@ fn initRecycle(device: *const Device, instance: *const Instance, surface: vk.Sur
 
     return Swapchain{
         .gpa = gpa,
+        // .gpu_arena = gpu_arena,
         .gpu_alloc = gpu_alloc,
         .surface_format = surface_format,
         .extent = actual_extent,
@@ -153,13 +187,21 @@ fn initRecycle(device: *const Device, instance: *const Instance, surface: vk.Sur
     };
 }
 
+const tracy = @import("tracy");
+const Zone = tracy.Zone;
+
 pub fn recreate(self: *Swapchain, device: *const Device, instance: *const Instance, surface: vk.SurfaceKHR, screen_width: usize, screen_height: usize) !void {
+    const zone = Zone.begin(.{ .name = "swapchain", .src = @src() });
+    defer zone.end();
+
     const gpa = self.gpa;
+    // const gpu_arena = self.gpu_arena;
     const gpu_alloc = self.gpu_alloc;
     const old_handle = self.handle;
 
     try device.proxy.deviceWaitIdle();
 
+    // const new: Swapchain = try initRecycle(device, instance, surface, screen_width, screen_height, gpa, gpu_arena, old_handle);
     const new: Swapchain = try initRecycle(device, instance, surface, screen_width, screen_height, gpa, gpu_alloc, old_handle);
 
     self.deinitExceptSwapchain(device);
@@ -184,6 +226,7 @@ fn deinitExceptSwapchain(self: *Swapchain, device: *const Device) void {
     self.gpa.free(self.swap_image_views);
     // swap_images owned by swapchain itself, and will be cleaned when swapchain destroyed
     self.gpa.free(self.swap_images);
+    // self.gpu_arena.reset();
 }
 
 pub fn deinit(self: *Swapchain, device: *const Device) void {

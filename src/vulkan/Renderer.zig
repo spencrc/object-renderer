@@ -8,6 +8,7 @@ const Swapchain = @import("Swapchain.zig");
 const Buffer = @import("Buffer.zig");
 const Device = @import("Device.zig");
 const GpuAllocator = @import("GpuAllocator.zig");
+const GpuArena = @import("GpuArenaAllocator.zig");
 const GraphicsPipeline = @import("GraphicsPipeline.zig");
 
 const max_frames_in_flight = 2;
@@ -59,6 +60,8 @@ surface: vk.SurfaceKHR,
 
 device: Device,
 
+gpu_arena: GpuArena,
+
 swapchain: Swapchain,
 
 descriptor_pool: vk.DescriptorPool,
@@ -91,6 +94,8 @@ pub fn init(
 
     const mem_props = instance.proxy.getPhysicalDeviceMemoryProperties(device.pdevice);
     const gpu_alloc: GpuAllocator = .init(device.proxy, mem_props);
+    var gpu_arena: GpuArena = try .init(device.proxy, mem_props, gpa);
+    errdefer gpu_arena.deinit();
 
     var swapchain: Swapchain = try .init(&device, instance, surface, screen_width, screen_height, gpa, gpu_alloc);
     errdefer swapchain.deinit(&device);
@@ -121,6 +126,18 @@ pub fn init(
     }, null);
     defer device.proxy.destroyCommandPool(command_pool, null);
 
+    const transient_arena: GpuArena = try .init(device.proxy, mem_props, gpa);
+    defer transient_arena.deinit();
+    const staging_buffer: Buffer = try .init(
+        &device,
+        64 * 1024 * 1024,
+        .{ .transfer_src_bit = true },
+        .{ .host_visible_bit = true, .host_coherent_bit = true },
+        .{},
+        gpu_alloc,
+    );
+    defer staging_buffer.deinit(&device);
+
     const vertex_buffer: Buffer = try .init(
         &device,
         @sizeOf(@TypeOf(vertices)),
@@ -130,7 +147,8 @@ pub fn init(
         gpu_alloc,
     );
     errdefer vertex_buffer.deinit(&device);
-    try vertex_buffer.uploadTo(&device, command_pool, Vertex, &vertices, gpu_alloc);
+    try staging_buffer.uploadTo(Vertex, &vertices, &device);
+    try staging_buffer.copyTo(vertex_buffer, @sizeOf(@TypeOf(vertices)), &device, command_pool);
 
     const index_buffer: Buffer = try .init(
         &device,
@@ -141,13 +159,15 @@ pub fn init(
         gpu_alloc,
     );
     errdefer index_buffer.deinit(&device);
-    try index_buffer.uploadTo(&device, command_pool, u16, &indices, gpu_alloc);
+    try staging_buffer.uploadTo(u16, &indices, &device);
+    try staging_buffer.copyTo(index_buffer, @sizeOf(@TypeOf(indices)), &device, command_pool);
 
     return .{
         .gpa = gpa,
         .instance = instance,
         .surface = surface,
         .device = device,
+        .gpu_arena = gpu_arena,
         .swapchain = swapchain,
         .descriptor_pool = descriptor_pool,
         .descriptor_set_layout = descriptor_set_layout,
@@ -175,6 +195,8 @@ pub fn deinit(self: *Renderer) void {
     deinitDescriptorSet(&self.device, self.descriptor_pool, self.descriptor_set_layout);
 
     self.swapchain.deinit(&self.device);
+
+    self.gpu_arena.deinit();
 
     self.device.deinit(self.gpa);
 
