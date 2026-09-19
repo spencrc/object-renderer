@@ -7,7 +7,7 @@ const Vertex = @import("Vertex.zig");
 const Swapchain = @import("Swapchain.zig");
 const Buffer = @import("Buffer.zig");
 const Device = @import("Device.zig");
-const GpuAllocator = @import("GpuAllocator.zig");
+const VkPoolAlloc = @import("mem/PoolAllocator.zig");
 const GraphicsPipeline = @import("GraphicsPipeline.zig");
 
 const max_frames_in_flight = 2;
@@ -67,6 +67,8 @@ descriptor_set: vk.DescriptorSet,
 
 pipeline: GraphicsPipeline,
 
+persistent_arena: VkPoolAlloc,
+
 timeline_semaphore: vk.Semaphore,
 frame_resources: [max_frames_in_flight]FrameResources,
 
@@ -89,15 +91,6 @@ pub fn init(
     const device: Device = try .init(instance, surface, gpa);
     errdefer device.deinit(gpa);
 
-    const mem_props = instance.proxy.getPhysicalDeviceMemoryProperties(device.pdevice);
-    const gpu_alloc: GpuAllocator = .init(device.proxy, mem_props);
-    // var gpu_arena: VkPoolAlloc = try .init(&.{
-    //     .device = device.proxy,
-    //     .memory_properties = mem_props,
-    //     .block_size = 10 * 1024 * 1024, // 10MB
-    // }, gpa);
-    // errdefer gpu_arena.deinit();
-
     var swapchain: Swapchain = try .init(&device, instance, surface, screen_width, screen_height, gpa);
     errdefer swapchain.deinit(&device);
 
@@ -110,6 +103,14 @@ pub fn init(
     const pipeline: GraphicsPipeline = try .init(&device, swapchain.surface_format.format, descriptor_set_layout);
     errdefer pipeline.deinit(&device);
 
+    const mem_props = instance.proxy.getPhysicalDeviceMemoryProperties(device.pdevice);
+    const persistent_arena: VkPoolAlloc = try .init(&.{
+        .device = device.proxy,
+        .memory_properties = mem_props,
+        .block_size = 10 * 1024 * 1024, // 10MB
+    }, gpa);
+    errdefer persistent_arena.deinit();
+
     const semaphore_type_info = vk.SemaphoreTypeCreateInfo{
         .semaphore_type = .timeline,
         .initial_value = max_frames_in_flight,
@@ -119,7 +120,7 @@ pub fn init(
     }, null);
     errdefer device.proxy.destroySemaphore(timeline_semaphore, null);
 
-    const frame_resources = try initFrameResources(&device, descriptor_set, gpu_alloc);
+    const frame_resources = try initFrameResources(&device, descriptor_set, persistent_arena, gpa);
     errdefer deinitFrameResources(&device, frame_resources);
 
     const command_pool = try device.proxy.createCommandPool(&.{
@@ -131,11 +132,12 @@ pub fn init(
     // defer transient_arena.deinit();
     const staging_buffer: Buffer = try .init(
         &device,
-        64 * 1024 * 1024,
+        1 * 1024 * 1024,
         .{ .transfer_src_bit = true },
         .{ .host_visible_bit = true, .host_coherent_bit = true },
         .{},
-        gpu_alloc,
+        persistent_arena,
+        gpa,
     );
     defer staging_buffer.deinit(&device);
 
@@ -145,10 +147,11 @@ pub fn init(
         .{ .transfer_dst_bit = true, .vertex_buffer_bit = true, .shader_device_address_bit = true },
         .{ .device_local_bit = true },
         .{ .device_address_bit = true },
-        gpu_alloc,
+        persistent_arena,
+        gpa,
     );
     errdefer vertex_buffer.deinit(&device);
-    try staging_buffer.uploadTo(Vertex, &vertices, &device);
+    try staging_buffer.uploadTo(Vertex, &vertices);
     try staging_buffer.copyTo(vertex_buffer, @sizeOf(@TypeOf(vertices)), &device, command_pool);
 
     const index_buffer: Buffer = try .init(
@@ -157,10 +160,11 @@ pub fn init(
         .{ .transfer_dst_bit = true, .index_buffer_bit = true },
         .{ .device_local_bit = true },
         .{},
-        gpu_alloc,
+        persistent_arena,
+        gpa,
     );
     errdefer index_buffer.deinit(&device);
-    try staging_buffer.uploadTo(u16, &indices, &device);
+    try staging_buffer.uploadTo(u16, &indices);
     try staging_buffer.copyTo(index_buffer, @sizeOf(@TypeOf(indices)), &device, command_pool);
 
     return .{
@@ -173,6 +177,7 @@ pub fn init(
         .descriptor_set_layout = descriptor_set_layout,
         .descriptor_set = descriptor_set,
         .pipeline = pipeline,
+        .persistent_arena = persistent_arena,
         .timeline_semaphore = timeline_semaphore,
         .frame_resources = frame_resources,
         .vertex_buffer = vertex_buffer,
@@ -189,6 +194,8 @@ pub fn deinit(self: *Renderer) void {
     deinitFrameResources(&self.device, self.frame_resources);
 
     self.device.proxy.destroySemaphore(self.timeline_semaphore, null);
+
+    self.persistent_arena.deinit();
 
     self.pipeline.deinit(&self.device);
 
@@ -259,7 +266,7 @@ fn deinitDescriptorSet(device: *const Device, descriptor_pool: vk.DescriptorPool
 }
 
 /// Initializes array of frame resources for Renderer
-fn initFrameResources(device: *const Device, descriptor_set: vk.DescriptorSet, gpu_alloc: GpuAllocator) ![max_frames_in_flight]FrameResources {
+fn initFrameResources(device: *const Device, descriptor_set: vk.DescriptorSet, persistent_arena: VkPoolAlloc, gpa: std.mem.Allocator) ![max_frames_in_flight]FrameResources {
     var frame_resources: [max_frames_in_flight]FrameResources = undefined;
     for (&frame_resources) |*res| {
         const image_acquired_semaphore = try device.proxy.createSemaphore(&.{}, null);
@@ -283,12 +290,10 @@ fn initFrameResources(device: *const Device, descriptor_set: vk.DescriptorSet, g
             .{ .uniform_buffer_bit = true },
             .{ .host_visible_bit = true, .host_coherent_bit = true },
             .{},
-            gpu_alloc,
+            persistent_arena,
+            gpa,
         );
         errdefer uniform_buffer.deinit(device);
-
-        const data = try device.proxy.mapMemory(uniform_buffer.memory, 0, vk.WHOLE_SIZE, .{});
-        errdefer device.proxy.unmapMemory(uniform_buffer.memory);
 
         device.proxy.updateDescriptorSets(&[_]vk.WriteDescriptorSet{
             .{
@@ -312,7 +317,7 @@ fn initFrameResources(device: *const Device, descriptor_set: vk.DescriptorSet, g
             .command_pool = command_pool,
             .command_buffer = command_buffer,
             .uniform_buffer = uniform_buffer,
-            .p_ubo_data = data,
+            .p_ubo_data = uniform_buffer.alloc.mapped,
         };
     }
     return frame_resources;
@@ -323,7 +328,6 @@ fn deinitFrameResources(device: *const Device, frame_resources: [max_frames_in_f
         device.proxy.freeCommandBuffers(res.command_pool, &.{res.command_buffer});
         device.proxy.destroyCommandPool(res.command_pool, null);
         device.proxy.destroySemaphore(res.image_acquired_semaphore, null);
-        device.proxy.unmapMemory(res.uniform_buffer.memory);
         res.uniform_buffer.deinit(device);
     }
 }

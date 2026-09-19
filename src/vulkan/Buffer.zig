@@ -1,18 +1,18 @@
 const std = @import("std");
 const vk = @import("vulkan");
 const Device = @import("Device.zig");
-const GpuAllocator = @import("GpuAllocator.zig");
+const VkPoolAlloc = @import("mem/PoolAllocator.zig");
 
 const Buffer = @This();
 
 handle: vk.Buffer,
-memory: vk.DeviceMemory,
+alloc: VkPoolAlloc.Allocation,
 device_address: vk.DeviceAddress,
 
 /// Method that returns a Buffer struct containing the VkBuffer and VkDeviceMemory objects. Asserts usage and flag BDA bit are same truth value
 // TODO: possibly improve API by taking bda as a bool to enable it or not
 // can simplify GpuArenaAllocator as well if we take bda enabled as a bool
-pub fn init(device: *const Device, size: vk.DeviceSize, usage: vk.BufferUsageFlags, properties: vk.MemoryPropertyFlags, flags: vk.MemoryAllocateFlags, gpu_alloc: GpuAllocator) !Buffer {
+pub fn init(device: *const Device, size: vk.DeviceSize, usage: vk.BufferUsageFlags, properties: vk.MemoryPropertyFlags, flags: vk.MemoryAllocateFlags, vk_arena: VkPoolAlloc, gpa: std.mem.Allocator) !Buffer {
     std.debug.assert(usage.shader_device_address_bit == flags.device_address_bit);
     const buffer = try device.proxy.createBuffer(&.{
         .size = size,
@@ -21,29 +21,29 @@ pub fn init(device: *const Device, size: vk.DeviceSize, usage: vk.BufferUsageFla
     }, null);
     errdefer device.proxy.destroyBuffer(buffer, null);
     const mem_reqs = device.proxy.getBufferMemoryRequirements(buffer);
-    const mem = try gpu_alloc.allocate(mem_reqs, properties, flags);
-    errdefer device.proxy.freeMemory(mem, null);
-    try device.proxy.bindBufferMemory(buffer, mem, 0);
+    const alloc = try vk_arena.allocate(&.{
+        .requirements = mem_reqs,
+        .properties = properties,
+        .flags = flags,
+        .kind = .linear,
+    }, gpa);
+    try device.proxy.bindBufferMemory(buffer, alloc.handle, alloc.offset);
     // Vulkan defines the integer value of 0 to be null (as everyone would hopefully expect!).
     const device_address = if (usage.shader_device_address_bit and flags.device_address_bit) device.proxy.getBufferDeviceAddress(&.{ .buffer = buffer }) else 0;
     return .{
         .handle = buffer,
-        .memory = mem,
+        .alloc = alloc,
         .device_address = device_address,
     };
 }
 
 pub fn deinit(self: *const Buffer, device: *const Device) void {
     device.proxy.destroyBuffer(self.handle, null);
-    device.proxy.freeMemory(self.memory, null);
 }
 
 /// Takes objects of type T and copys them into the provided buffer
-pub fn uploadTo(src: Buffer, comptime T: type, objects: []const T, device: *const Device) !void {
-    const data = try device.proxy.mapMemory(src.memory, 0, vk.WHOLE_SIZE, .{});
-    defer device.proxy.unmapMemory(src.memory);
-
-    const gpu_objects: [*]T = @ptrCast(@alignCast(data));
+pub fn uploadTo(src: Buffer, comptime T: type, objects: []const T) !void {
+    const gpu_objects: [*]T = @ptrCast(@alignCast(src.alloc.mapped));
     @memcpy(gpu_objects, objects[0..]);
 }
 

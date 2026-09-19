@@ -19,9 +19,10 @@ pub const PoolAllocatorOptions = struct {
 pub fn init(opts: *const PoolAllocatorOptions, gpa: std.mem.Allocator) !PoolAllocator {
     const pools = try gpa.alloc(Pool, opts.memory_properties.memory_type_count);
     for (pools, 0..) |*p, i| {
-        p.bda_arena = .init(opts.device, opts.block_size, @intCast(i), .{ .device_address_bit = true });
-        p.linear_arena = .init(opts.device, opts.block_size, @intCast(i), .{});
-        p.nonlinear_arena = .init(opts.device, opts.block_size, @intCast(i), .{});
+        const host_visible = opts.memory_properties.memory_types[i].property_flags.host_visible_bit;
+        p.bda_arena = .init(opts.device, opts.block_size, @intCast(i), .{ .device_address_bit = true }, host_visible);
+        p.linear_arena = .init(opts.device, opts.block_size, @intCast(i), .{}, host_visible);
+        p.nonlinear_arena = .init(opts.device, opts.block_size, @intCast(i), .{}, host_visible);
     }
     return .{
         .device = opts.device,
@@ -87,6 +88,8 @@ pub fn allocate(pa: *const PoolAllocator, opts: *const AllocateOptions, allocato
         .handle = head.handle,
         .size = opts.requirements.size,
         .offset = start_offset,
+        // convert base to u64 to perform ptr math, so the ptr correctly points to the mapping for this allocation
+        .mapped = if (head.mapped) |base| @ptrFromInt(@intFromPtr(base) + start_offset) else null,
     };
 }
 
@@ -105,16 +108,18 @@ fn computePadding(offset: vk.DeviceSize, alignment: u64) vk.DeviceSize {
     return (offset + (alignment - 1)) & ~(alignment - 1);
 }
 
-const Allocation = struct {
+pub const Allocation = struct {
     handle: vk.DeviceMemory,
     size: vk.DeviceSize,
     offset: vk.DeviceSize,
+    mapped: ?*anyopaque,
 };
 
 const Chunk = struct {
     handle: vk.DeviceMemory,
     size: vk.DeviceSize,
     offset: vk.DeviceSize,
+    mapped: ?*anyopaque,
     next: ?*Chunk,
 };
 
@@ -124,13 +129,15 @@ const ChunkArena = struct {
     block_size: vk.DeviceSize,
     memory_index_type: u32,
     flags: vk.MemoryAllocateFlags,
+    host_visible: bool,
 
-    fn init(device: vk.DeviceProxy, block_size: vk.DeviceSize, memory_index_type: u32, flags: vk.MemoryAllocateFlags) ChunkArena {
+    fn init(device: vk.DeviceProxy, block_size: vk.DeviceSize, memory_index_type: u32, flags: vk.MemoryAllocateFlags, host_visible: bool) ChunkArena {
         return .{
             .device = device,
             .block_size = block_size,
             .memory_index_type = memory_index_type,
             .flags = flags,
+            .host_visible = host_visible,
         };
     }
 
@@ -155,15 +162,18 @@ const ChunkArena = struct {
         };
         const c = try allocator.create(Chunk);
         errdefer allocator.destroy(c);
+        const memory = try ca.device.allocateMemory(&.{
+            .p_next = &allocate_flags_info,
+            .allocation_size = ca.block_size,
+            .memory_type_index = ca.memory_index_type,
+        }, null);
+        errdefer ca.device.freeMemory(memory, null);
         c.* = .{
             .size = ca.block_size,
             .offset = 0,
             .next = ca.head,
-            .handle = try ca.device.allocateMemory(&.{
-                .p_next = &allocate_flags_info,
-                .allocation_size = ca.block_size,
-                .memory_type_index = ca.memory_index_type,
-            }, null),
+            .handle = memory,
+            .mapped = if (ca.host_visible) try ca.device.mapMemory(memory, 0, ca.block_size, .{}) else null,
         };
         ca.head = c;
         return c;
@@ -181,6 +191,7 @@ const ChunkArena = struct {
     fn free(ca: *ChunkArena, device: vk.DeviceProxy, allocator: std.mem.Allocator) void {
         while (ca.head != null) {
             const c = ca.peek().?;
+            if (c.mapped != null) device.unmapMemory(c.handle);
             device.freeMemory(c.handle, null);
             ca.pop(allocator);
         }

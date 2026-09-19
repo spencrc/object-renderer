@@ -3,7 +3,6 @@ const std = @import("std");
 const Instance = @import("Instance.zig");
 const Device = @import("Device.zig");
 const VkPoolAlloc = @import("mem/PoolAllocator.zig");
-// const GpuAllocator = @import("GpuAllocator.zig");
 
 pub const depth_format = vk.Format.d32_sfloat;
 
@@ -11,7 +10,6 @@ const Swapchain = @This();
 
 gpa: std.mem.Allocator,
 swapchain_arena: VkPoolAlloc,
-// gpu_alloc: GpuAllocator,
 
 handle: vk.SwapchainKHR,
 surface_format: vk.SurfaceFormatKHR,
@@ -31,7 +29,6 @@ pub fn init(
     screen_width: usize,
     screen_height: usize,
     gpa: std.mem.Allocator,
-    // gpu_alloc: GpuAllocator,
 ) !Swapchain {
     const mem_props = instance.proxy.getPhysicalDeviceMemoryProperties(device.pdevice);
     const swapchain_arena: VkPoolAlloc = try .init(&.{
@@ -60,7 +57,6 @@ fn initRecycle(
     screen_width: usize,
     screen_height: usize,
     gpa: std.mem.Allocator,
-    // gpu_alloc: GpuAllocator,
     swapchain_arena: VkPoolAlloc,
     old_handle: vk.SwapchainKHR,
 ) !Swapchain {
