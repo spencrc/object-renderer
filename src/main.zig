@@ -11,7 +11,18 @@ const SDL_FLAGS = sdl3.InitFlags{
     .video = true,
 };
 
+pub const tracy_impl = @import("tracy_impl");
+pub const tracy = @import("tracy");
+
+const Zone = tracy.Zone;
+
 pub fn main(init: std.process.Init) !void {
+    const zone = Zone.begin(.{ .src = @src() });
+    defer zone.end();
+    tracy.frameMarkStart("main");
+    tracy.appInfo("vulkan_obj_renderer");
+    defer tracy.cleanExit(init.io);
+
     defer sdl3.shutdown();
 
     try sdl3.init(SDL_FLAGS);

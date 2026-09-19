@@ -24,6 +24,10 @@
             .url = "https://github.com/shader-slang/slang/releases/download/v2026.16/slang-2026.16-windows-x86_64.zip",
             .hash = "N-V-__8AAPD4vgjEL3-0I9DUKDprMWOYFTmPPqVT3FXCJ6iG",
         },
+        .tracy = .{
+            .url = "git+https://codeberg.org/Games-by-Mason/tracy_zig.git#39cf5b557438bafb64513e4f02546daaa1240599",
+            .hash = "tracy-1.0.0+0.13.1-R7l8BWxQAQB36bRaCuUfFu77XFrBOE2rTMRYTOjX574F",
+        },
     },
     .paths = .{
         "build.zig",

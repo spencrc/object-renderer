@@ -13,6 +13,17 @@ pub fn build(b: *std.Build) void {
         .registry = b.dependency("vulkan_headers", .{}).path("registry/vk.xml"),
     }).module("vulkan-zig");
 
+    const tracy_enabled = b.option(
+        bool,
+        "tracy",
+        "Build with Tracy support.",
+    ) orelse false;
+
+    const tracy = b.dependency("tracy", .{
+        .target = target,
+        .optimize = optimize,
+    });
+
     const exe = b.addExecutable(.{
         .name = "minecraft_again",
         .root_module = b.createModule(.{
@@ -22,10 +33,19 @@ pub fn build(b: *std.Build) void {
             .imports = &.{
                 .{ .name = "vulkan", .module = vulkan },
                 .{ .name = "sdl3", .module = sdl3.module("sdl3") },
+                .{ .name = "tracy", .module = tracy.module("tracy") },
             },
         }),
     });
     b.installArtifact(exe);
+
+    if (tracy_enabled) {
+        // The user asked to enable Tracy, use the real implementation
+        exe.root_module.addImport("tracy_impl", tracy.module("tracy_impl_enabled"));
+    } else {
+        // The user asked to disable Tracy, use the dummy implementation
+        exe.root_module.addImport("tracy_impl", tracy.module("tracy_impl_disabled"));
+    }
 
     const slang_dep = b.dependency("slang-linux-x86_64", .{});
     const slangc_path = slang_dep.path("bin/slangc");
