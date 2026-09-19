@@ -8,7 +8,6 @@ const Swapchain = @import("Swapchain.zig");
 const Buffer = @import("Buffer.zig");
 const Device = @import("Device.zig");
 const GpuAllocator = @import("GpuAllocator.zig");
-const VkPoolAlloc = @import("mem/PoolAllocator.zig");
 const GraphicsPipeline = @import("GraphicsPipeline.zig");
 
 const max_frames_in_flight = 2;
@@ -60,8 +59,6 @@ surface: vk.SurfaceKHR,
 
 device: Device,
 
-gpu_arena: VkPoolAlloc,
-
 swapchain: Swapchain,
 
 descriptor_pool: vk.DescriptorPool,
@@ -94,14 +91,14 @@ pub fn init(
 
     const mem_props = instance.proxy.getPhysicalDeviceMemoryProperties(device.pdevice);
     const gpu_alloc: GpuAllocator = .init(device.proxy, mem_props);
-    var gpu_arena: VkPoolAlloc = try .init(&.{
-        .device = device.proxy,
-        .memory_properties = mem_props,
-        .block_size = 10 * 1024 * 1024, // 10MB
-    }, gpa);
-    errdefer gpu_arena.deinit();
+    // var gpu_arena: VkPoolAlloc = try .init(&.{
+    //     .device = device.proxy,
+    //     .memory_properties = mem_props,
+    //     .block_size = 10 * 1024 * 1024, // 10MB
+    // }, gpa);
+    // errdefer gpu_arena.deinit();
 
-    var swapchain: Swapchain = try .init(&device, instance, surface, screen_width, screen_height, gpa, gpu_arena);
+    var swapchain: Swapchain = try .init(&device, instance, surface, screen_width, screen_height, gpa);
     errdefer swapchain.deinit(&device);
 
     const descriptor_set_info = try initDescriptorSet(&device);
@@ -171,7 +168,6 @@ pub fn init(
         .instance = instance,
         .surface = surface,
         .device = device,
-        .gpu_arena = gpu_arena,
         .swapchain = swapchain,
         .descriptor_pool = descriptor_pool,
         .descriptor_set_layout = descriptor_set_layout,
@@ -199,8 +195,6 @@ pub fn deinit(self: *Renderer) void {
     deinitDescriptorSet(&self.device, self.descriptor_pool, self.descriptor_set_layout);
 
     self.swapchain.deinit(&self.device);
-
-    self.gpu_arena.deinit();
 
     self.device.deinit(self.gpa);
 
