@@ -8,7 +8,7 @@ const Swapchain = @import("Swapchain.zig");
 const Buffer = @import("Buffer.zig");
 const Device = @import("Device.zig");
 const GpuAllocator = @import("GpuAllocator.zig");
-const GpuArena = @import("GpuArenaAllocator.zig");
+const VkPoolAlloc = @import("mem/PoolAllocator.zig");
 const GraphicsPipeline = @import("GraphicsPipeline.zig");
 
 const max_frames_in_flight = 2;
@@ -60,7 +60,7 @@ surface: vk.SurfaceKHR,
 
 device: Device,
 
-gpu_arena: GpuArena,
+gpu_arena: VkPoolAlloc,
 
 swapchain: Swapchain,
 
@@ -94,7 +94,11 @@ pub fn init(
 
     const mem_props = instance.proxy.getPhysicalDeviceMemoryProperties(device.pdevice);
     const gpu_alloc: GpuAllocator = .init(device.proxy, mem_props);
-    var gpu_arena: GpuArena = try .init(device.proxy, mem_props, gpa);
+    var gpu_arena: VkPoolAlloc = try .init(&.{
+        .device = device.proxy,
+        .memory_properties = mem_props,
+        .block_size = 10 * 1024 * 1024, // 10MB
+    }, gpa);
     errdefer gpu_arena.deinit();
 
     var swapchain: Swapchain = try .init(&device, instance, surface, screen_width, screen_height, gpa, gpu_arena);
@@ -126,8 +130,8 @@ pub fn init(
     }, null);
     defer device.proxy.destroyCommandPool(command_pool, null);
 
-    const transient_arena: GpuArena = try .init(device.proxy, mem_props, gpa);
-    defer transient_arena.deinit();
+    // const transient_arena: VkPoolAlloc = try .init(device.proxy, mem_props, gpa);
+    // defer transient_arena.deinit();
     const staging_buffer: Buffer = try .init(
         &device,
         64 * 1024 * 1024,

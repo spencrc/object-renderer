@@ -2,15 +2,15 @@ const vk = @import("vulkan");
 const std = @import("std");
 const Instance = @import("Instance.zig");
 const Device = @import("Device.zig");
-const GpuArena = @import("GpuArenaAllocator.zig");
-const GpuAllocator = @import("GpuAllocator.zig");
+const VkPoolAlloc = @import("mem/PoolAllocator.zig");
+// const GpuAllocator = @import("GpuAllocator.zig");
 
 pub const depth_format = vk.Format.d32_sfloat;
 
 const Swapchain = @This();
 
 gpa: std.mem.Allocator,
-gpu_arena: GpuArena,
+gpu_arena: VkPoolAlloc,
 // gpu_alloc: GpuAllocator,
 
 handle: vk.SwapchainKHR,
@@ -32,7 +32,7 @@ pub fn init(
     screen_height: usize,
     gpa: std.mem.Allocator,
     // gpu_alloc: GpuAllocator,
-    gpu_arena: GpuArena,
+    gpu_arena: VkPoolAlloc,
 ) !Swapchain {
     return initRecycle(
         device,
@@ -56,7 +56,7 @@ fn initRecycle(
     screen_height: usize,
     gpa: std.mem.Allocator,
     // gpu_alloc: GpuAllocator,
-    gpu_arena: GpuArena,
+    gpu_arena: VkPoolAlloc,
     old_handle: vk.SwapchainKHR,
 ) !Swapchain {
     const caps = try instance.proxy.getPhysicalDeviceSurfaceCapabilitiesKHR(device.pdevice, surface);
@@ -150,7 +150,11 @@ fn initRecycle(
     }, null);
     errdefer device.proxy.destroyImage(depth_image, null);
     const image_mem_reqs = device.proxy.getImageMemoryRequirements(depth_image);
-    const image_alloc = try gpu_arena.allocate_image(image_mem_reqs, .{ .device_local_bit = true }, .optimal);
+    const image_alloc = try gpu_arena.allocate(&.{
+        .requirements = image_mem_reqs,
+        .properties = .{ .device_local_bit = true },
+        .kind = .nonlinear,
+    }, gpa);
     try device.proxy.bindImageMemory(depth_image, image_alloc.handle, image_alloc.offset);
     // const image_mem = try gpu_alloc.allocate(image_mem_reqs, .{ .device_local_bit = true }, .{});
     // errdefer device.proxy.freeMemory(image_mem, null);

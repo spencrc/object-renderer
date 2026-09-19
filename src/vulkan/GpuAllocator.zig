@@ -24,6 +24,7 @@ fn findMemoryTypeIndex(self: GpuAllocator, memory_types: u32, flags: vk.MemoryPr
     return error.NoSuitableMemoryType;
 }
 
+// TODO: impl simple arena allocator for gpu allocation
 pub fn allocate(self: GpuAllocator, requirements: vk.MemoryRequirements, properties: vk.MemoryPropertyFlags, flags: vk.MemoryAllocateFlags) !vk.DeviceMemory {
     const allocate_flags_info = vk.MemoryAllocateFlagsInfo{
         .flags = flags,
