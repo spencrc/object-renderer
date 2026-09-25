@@ -40,7 +40,7 @@ pub const Vec3 = extern struct {
     }
 
     pub fn up() Vec3 {
-        return Vec3{ .x = 0.0, .y = 1.0, .z = 0.0 };
+        return Vec3{ .x = 0.0, .y = 0.0, .z = 1.0 };
     }
 
     pub fn len(v: Vec3) f32 {

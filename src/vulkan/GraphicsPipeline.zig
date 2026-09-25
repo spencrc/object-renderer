@@ -1,6 +1,6 @@
 const std = @import("std");
 const vk = @import("vulkan");
-const math = @import("math.zig");
+const math = @import("../math.zig");
 const Device = @import("Device.zig");
 const Vertex = @import("Vertex.zig");
 const Swapchain = @import("Swapchain.zig");

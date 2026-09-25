@@ -1,7 +1,7 @@
 const vk = @import("vulkan");
 const std = @import("std");
 const builtin = @import("builtin");
-const math = @import("math.zig");
+const math = @import("../math.zig");
 const Instance = @import("Instance.zig");
 const Vertex = @import("Vertex.zig");
 const Swapchain = @import("Swapchain.zig");
@@ -333,7 +333,7 @@ fn deinitFrameResources(device: *const Device, frame_resources: [max_frames_in_f
 }
 
 /// To be called inside application loop to actually draw!
-pub fn render(self: *Renderer, screen_width: usize, screen_height: usize) !void {
+pub fn render(self: *Renderer, screen_width: usize, screen_height: usize, view: math.Mat4, proj: math.Mat4) !void {
     const device = self.device.proxy;
 
     if (self.recreate_swapchain) {
@@ -459,7 +459,7 @@ pub fn render(self: *Renderer, screen_width: usize, screen_height: usize) !void 
         .view_mask = 0,
     };
 
-    updateUniformBuffer(res.p_ubo_data, screen_width, screen_height);
+    updateUniformBuffer(res.p_ubo_data, view, proj);
 
     // set global descriptors
     device.cmdBindDescriptorSets(res.command_buffer, .graphics, self.pipeline.pipeline_layout, 0, &[_]vk.DescriptorSet{self.descriptor_set}, null);
@@ -588,10 +588,10 @@ pub fn render(self: *Renderer, screen_width: usize, screen_height: usize) !void 
     };
 }
 
-fn updateUniformBuffer(ubo_data: ?*anyopaque, screen_width: usize, screen_height: usize) void {
+fn updateUniformBuffer(ubo_data: ?*anyopaque, view: math.Mat4, proj: math.Mat4) void {
     var ubo = UniformBufferObject{
-        .view = .lookat(math.Vec3{ .x = 2, .y = 2, .z = 2 }, math.Vec3{ .x = 0, .y = 0, .z = 0 }, math.Vec3{ .x = 0, .y = 0, .z = 1 }),
-        .proj = .persp(75, @floatFromInt(screen_width / screen_height), 0.1, 10),
+        .view = view,
+        .proj = proj,
     };
     ubo.proj.m[1][1] *= -1;
     const gpu_data: *UniformBufferObject = @ptrCast(@alignCast(ubo_data));

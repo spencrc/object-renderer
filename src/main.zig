@@ -1,6 +1,7 @@
 const std = @import("std");
 const sdl3 = @import("sdl3");
 const vk = @import("vulkan");
+const Camera = @import("Camera.zig");
 const Instance = @import("vulkan/Instance.zig");
 const Renderer = @import("vulkan/Renderer.zig");
 
@@ -44,9 +45,12 @@ pub fn main(init: std.process.Init) !void {
     var ctx: Renderer = try .init(&instance, @enumFromInt(@intFromPtr(sdl_surface.surface)), SCREEN_WIDTH, SCREEN_HEIGHT, init.gpa);
     defer ctx.deinit();
 
+    var cam: Camera = .init();
+
     var quit = false;
     var w: usize = SCREEN_WIDTH;
     var h: usize = SCREEN_HEIGHT;
+    var last_time: u64 = sdl3.timer.getNanosecondsSinceInit();
     while (!quit) {
         // Event logic.
         while (sdl3.events.poll()) |event|
@@ -57,9 +61,19 @@ pub fn main(init: std.process.Init) !void {
                     w = @intCast(window_resized.width);
                     h = @intCast(window_resized.height);
                 },
+                .mouse_button_up => |mouse_button_up| if (mouse_button_up.button == .right)
+                    try sdl3.mouse.setWindowRelativeMode(window, false),
+                .mouse_button_down => |mouse_button_down| if (mouse_button_down.button == .right)
+                    try sdl3.mouse.setWindowRelativeMode(window, true),
+                .mouse_motion => |mouse_motion| cam.handleMouseMovement(sdl3.mouse.getWindowRelativeMode(window), mouse_motion.x_rel, mouse_motion.y_rel),
                 else => {},
             };
+        const current_time: u64 = sdl3.timer.getNanosecondsSinceInit();
+        const dt: f32 = @floatCast(sdl3.timer.nanosecondsToSeconds(@floatFromInt(current_time - last_time)));
+        last_time = current_time;
+        cam.updateCamera(dt);
+        cam.updateMatricies(w, h);
 
-        if (w > 0 and h > 0) try ctx.render(w, h);
+        if (w > 0 and h > 0) try ctx.render(w, h, cam.view, cam.proj);
     }
 }
