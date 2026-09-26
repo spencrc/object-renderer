@@ -66,6 +66,22 @@ pub fn main(init: std.process.Init) !void {
                 .mouse_button_down => |mouse_button_down| if (mouse_button_down.button == .right)
                     try sdl3.mouse.setWindowRelativeMode(window, true),
                 .mouse_motion => |mouse_motion| cam.handleMouseMovement(sdl3.mouse.getWindowRelativeMode(window), mouse_motion.x_rel, mouse_motion.y_rel),
+                .key_down => |key_down| if (key_down.key) |key| switch (key) {
+                    .d => cam.input.x = 1,
+                    .a => cam.input.x = -1,
+                    .w => cam.input.y = 1,
+                    .s => cam.input.y = -1,
+
+                    else => {},
+                },
+                .key_up => |key_up| if (key_up.key) |key| switch (key) {
+                    .d => cam.input.x = 0,
+                    .a => cam.input.x = 0,
+                    .w => cam.input.y = 0,
+                    .s => cam.input.y = 0,
+
+                    else => {},
+                },
                 else => {},
             };
         const current_time: u64 = sdl3.timer.getNanosecondsSinceInit();
