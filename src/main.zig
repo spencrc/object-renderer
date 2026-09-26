@@ -5,10 +5,9 @@ const Camera = @import("Camera.zig");
 const Instance = @import("vulkan/Instance.zig");
 const Renderer = @import("vulkan/Renderer.zig");
 
-const FPS = 60;
-const SCREEN_WIDTH = 640;
-const SCREEN_HEIGHT = 480;
-const SDL_FLAGS = sdl3.InitFlags{
+const initial_width = 640;
+const initial_height = 480;
+const sdl_flags = sdl3.InitFlags{
     .video = true,
 };
 
@@ -26,14 +25,14 @@ pub fn main(init: std.process.Init) !void {
 
     defer sdl3.shutdown();
 
-    try sdl3.init(SDL_FLAGS);
-    defer sdl3.quit(SDL_FLAGS);
+    try sdl3.init(sdl_flags);
+    defer sdl3.quit(sdl_flags);
 
     const window_flags = sdl3.video.Window.Flags{
         .vulkan = true,
         .resizable = true,
     };
-    var window: sdl3.video.Window = try .init("Hello Vulkan", SCREEN_WIDTH, SCREEN_HEIGHT, window_flags);
+    var window: sdl3.video.Window = try .init("Hello Vulkan", initial_width, initial_height, window_flags);
     defer window.deinit();
 
     const getInstanceProcAddr: vk.PfnGetInstanceProcAddr = @ptrCast(try sdl3.vulkan.getVkGetInstanceProcAddr());
@@ -42,14 +41,14 @@ pub fn main(init: std.process.Init) !void {
     defer instance.deinit();
 
     const sdl_surface: sdl3.vulkan.Surface = try .init(window, @ptrFromInt(@intFromEnum(instance.proxy.handle)), null);
-    var ctx: Renderer = try .init(&instance, @enumFromInt(@intFromPtr(sdl_surface.surface)), SCREEN_WIDTH, SCREEN_HEIGHT, init.gpa);
+    var ctx: Renderer = try .init(&instance, @enumFromInt(@intFromPtr(sdl_surface.surface)), initial_width, initial_height, init.gpa);
     defer ctx.deinit();
 
     var cam: Camera = .init();
 
     var quit = false;
-    var w: usize = SCREEN_WIDTH;
-    var h: usize = SCREEN_HEIGHT;
+    var w: usize = initial_width;
+    var h: usize = initial_height;
     var last_time: u64 = sdl3.timer.getNanosecondsSinceInit();
     while (!quit) {
         // Event logic.
